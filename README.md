@@ -1,130 +1,120 @@
-# Anonymity Tool Anonyx v1.1
+# Anonymity Tool Anonyx v1.2
 
 ## Overview
-Anonyx is a robust anonymity tool designed for Kali Linux or any other Debian-based Distro to automate the configuration of Tor, Proxychains, and secure DNS settings. It enhances your online privacy by enabling anonymous browsing and operations.
+Anonyx is a simple anonymity tool for Kali Linux or any other Debian-based distro. It automates Tor, Proxychains and secure DNS setup so you can browse more privately.
 
 ## Features
-- Automates installation and configuration of Tor, Proxychains, and secure DNS.
-- Logs all operations for transparency and troubleshooting.
-- Provides a simple CLI menu to enable and disable anonymity mode.
-- Verifies Tor anonymity connection status.
+- Installs and configures Tor, Proxychains and secure DNS.
+- Backs up your original configs before changing anything.
+- Simple menu + cli flags to enable / disable anonymity.
+- Checks if Tor is actually working before saying done.
+- Logs to /var/log/anonymity.log for debugging.
 
 ## Prerequisites
-- **Operating System**: Ensure you are using Kali Linux or any other Debian-based distribution, as this tool is tailored for such environments.
-- **Root Access**: Full root privileges are required to modify network configurations and install necessary packages effectively.
+- Kali Linux or any Debian-based distro.
+- Root access (needed for network configs and packages).
 
 ## Installation
-1. **Clone the Repository**:
+1. **Clone the repo**:
     ```bash
     git clone https://github.com/Aryann019x/Anonymity-Tool.git
     cd Anonymity-Tool
     ```
 
-2. **Make the Script Executable**:
+2. **Make it executable**:
     ```bash
     chmod +x Anonyx.sh
     ```
-3. **Run the script with root privileges**:
+3. **Run it as root**:
     ```bash
     sudo ./Anonyx.sh
     ```
+    You can also run it directly:
+    ```bash
+    sudo ./Anonyx.sh --enable
+    sudo ./Anonyx.sh --status
+    sudo ./Anonyx.sh --disable
+    ```
 ## Menu Options
 
-**[1] Enable Anonymity**: Configures your system for anonymous browsing.  
-**[2] Disable Anonymity**: Restores your original network settings.  
-**[3] Show Status**: Displays the current status of anonymity-related services.  
+**[1] Enable Anonymity**: Sets up Tor + proxychains + anon DNS.  
+**[2] Disable Anonymity**: Restores your old configs.  
+**[3] Show Status**: Shows tor service, tor IP and DNS.  
 **[4] Exit**: Exits the tool.
 
 ## Tool Specifications
-- Tor Port: 9050  
-- Control Port: 9051  
-- DNS Servers:  
- 1.1.1.1  
- 9.9.9.9  
-208.67.222.222
-    
-- **Files Used**  
-Log File: /var/log/anonymity.log  
-Proxychains Configuration: /etc/proxychains4.conf  
-DNS Configuration: /etc/resolv.conf  
-Tor Configuration: /etc/tor/torrc
-  
-## Verifying the Tool is Working   
-Checking Anonymity Mode
-- Enable Anonymity Mode:  
+- Tor Port: 9050
+- Control Port: 9051
+- DNS Servers:
+  - 1.1.1.1
+  - 9.9.9.9
+  - 208.67.222.222
+
+- **Files used**
+  - Log: `/var/log/anonymity.log`
+  - Proxychains: `/etc/proxychains4.conf` (backup at `/etc/proxychains4.conf.bak.anonyx`)
+  - DNS: `/etc/resolv.conf` (backup at `/etc/resolv.conf.bak.anonyx`)
+  - Tor: `/etc/tor/torrc` (backup at `/etc/tor/torrc.bak.anonyx`)
+
+## How to check if its working
+- Enable it:
 
 ```bash
 sudo ./Anonyx.sh
-# Select option [1] to enable anonymity mode.
+# pick [1]
 ```
-## Verify Anonymity:
 
-**Check Tor Connection**:
+**Check Tor**:
 ```bash
 proxychains4 curl https://check.torproject.org
 ```
-You should see a message indicating that your browser is configured to use Tor.  
+Should say you are using Tor.
 
-
-**Check Tor Service Status**:
+**Tor service**:
 ```bash
 sudo systemctl status tor
 ```
-Ensure that the Tor service is active.  
 
-
-**Verify DNS Configuration**:
+**DNS**:
 ```bash
 cat /etc/resolv.conf
 ```
-The output should show the anonymous DNS servers:
-
-```bash
-plaintext
-nameserver 1.1.1.1  
-nameserver 9.9.9.9  
-nameserver 208.67.222.222   
+Should show:
+```
+nameserver 1.1.1.1
+nameserver 9.9.9.9
+nameserver 208.67.222.222
 ```
 
-**Check Firewall Rules**:
+**Firewall**:
 ```bash
-sudo ufw status verbose  
+sudo ufw status verbose
 ```
 
-## Disabling Anonymity Mode
-- Disable Anonymity:
-
+## Disable it
 ```bash
 sudo ./Anonyx.sh
-# Select option [2] to disable anonymity mode.
+# pick [2]
 ```
-
-## Verify Restoration:
-
-**Check DNS Configuration**:
+Then check:
 ```bash
 cat /etc/resolv.conf
-```
-**The output should show your original DNS settings (e.g., Google DNS)**:   
-```bash
-plaintext   
-nameserver 8.8.8.8   
-nameserver 8.8.4.4   
-```
-
-**Check Internet Connection**:
-```bash
 curl https://www.example.com
 ```
-Ensure you can browse the internet normally.
-Logging All operations are logged in /var/log/anonymity.log.  
-This file can be used for troubleshooting and verifying the actions performed by the script.
+DNS should be back to normal and net should work.
+
+All runs are logged in `/var/log/anonymity.log`.
+
+## Notes
+- Tor socks runs on localhost so no need to open 9050/9051 in ufw. Script just makes sure ufw is enabled.
+- If ping is blocked on your network the script falls back to curl for the net check.
+- If you ran v1.1 before, old `/etc/resolv.conf.bak` is left alone, new backups use `.bak.anonyx`.
 
 ## CONTRIBUTING
-Contributions are welcome! Please submit a pull request or open an issue to discuss any changes or improvements.
+Found a bug or want something added? Open an issue or send a PR.
 
 ## AUTHOR
 Aryann019x
 
 ## LICENSE
-This project is licensed under the MIT License.
+MIT License - see LICENSE file.

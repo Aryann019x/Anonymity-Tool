@@ -1,14 +1,17 @@
 #!/bin/bash
 # ───────────────────────────────────────────────────────────────────────────
-# Anonymity Tool Anonyx v1.2
+# Anonymity Tool Anonyx v2.0
 # Kali Linux
 # Created by Aryann019x
 # A robust tool for anonymous operations
+# Note: no tool gives 100% privacy, this just makes leaks much harder
 # ───────────────────────────────────────────────────────────────────────────
 
-VERSION="1.2"
+VERSION="2.0"
 TOR_PORT=9050
 CONTROL_PORT=9051
+DNS_PORT=5353
+TRANS_PORT=9040
 DNS_SERVERS=("1.1.1.1" "9.9.9.9" "208.67.222.222")
 
 # Colors
@@ -29,6 +32,11 @@ RESOLV_BAK="/etc/resolv.conf.bak.anonyx"
 TOR_CONF="/etc/tor/torrc"
 TOR_BAK="/etc/tor/torrc.bak.anonyx"
 PROXY_BAK="/etc/proxychains4.conf.bak.anonyx"
+STATE_DIR="/var/lib/anonyx"
+STATE_FILE="$STATE_DIR/state"
+IPT_BAK="$STATE_DIR/iptables.bak"
+IP6T_BAK="$STATE_DIR/ip6tables.bak"
+CLEAR_IP_FILE="$STATE_DIR/clear_ip"
 
 # Error handling - just log it, dont spam on expected fails
 handle_error() {
@@ -94,10 +102,19 @@ check_internet() {
 install_packages() {
     echo -e "${WHITE}🔹 Installing required packages...${RESET}"
     apt-get update -qq || true
-    apt-get install -y tor proxychains4 torsocks curl ufw >/dev/null 2>&1 || {
+    apt-get install -y tor proxychains4 torsocks curl ufw iptables iproute2 >/dev/null 2>&1 || {
         echo -e "${RED}✖ Package installation failed${RESET}"
         return 1
     }
+}
+
+# tor user for killswitch (debian-tor on debian/kali, tor on some)
+get_tor_uid() {
+    id -u debian-tor 2>/dev/null || id -u tor 2>/dev/null || echo ""
+}
+
+have_iptables() {
+    command -v iptables >/dev/null 2>&1
 }
 
 # Configure Tor
@@ -106,12 +123,21 @@ setup_tor() {
     mkdir -p /etc/tor
     backup_once "$TOR_CONF" "$TOR_BAK"
     cat > "$TOR_CONF" << EOF
-SocksPort $TOR_PORT
+SocksPort 127.0.0.1:$TOR_PORT
+DNSPort 127.0.0.1:$DNS_PORT
+TransPort 127.0.0.1:$TRANS_PORT
 ControlPort $CONTROL_PORT
 DataDirectory /var/lib/tor
 RunAsDaemon 1
+CookieAuthentication 1
+AvoidDiskWrites 1
+VirtualAddrNetworkIPv4 10.192.0.0/10
+AutomapHostsOnResolve 1
+SocksPolicy accept 127.0.0.1
+SocksPolicy reject *
 EOF
     chmod 644 "$TOR_CONF"
+    mkdir -p "$STATE_DIR"
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
         systemctl restart tor
     else
@@ -137,6 +163,142 @@ EOF
     chmod 644 "$PROXYCHAINS_CONF"
 }
 
+# lock dns file so NetworkManager doesnt overwrite it
+lock_dns() {
+    printf "nameserver %s\n" "${DNS_SERVERS[@]}" > "$RESOLV_FILE"
+    chattr +i "$RESOLV_FILE" 2>/dev/null || true
+}
+
+unlock_dns() {
+    chattr -i "$RESOLV_FILE" 2>/dev/null || true
+}
+
+# block ipv6, it bypasses tor socks
+disable_ipv6() {
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1 || true
+    if command -v ip6tables >/dev/null 2>&1; then
+        ip6tables -P INPUT DROP 2>/dev/null || true
+        ip6tables -P FORWARD DROP 2>/dev/null || true
+        ip6tables -P OUTPUT DROP 2>/dev/null || true
+    fi
+}
+
+restore_ipv6() {
+    sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1 || true
+    sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1 || true
+    if [[ -f "$IP6T_BAK" ]] && command -v ip6tables-restore >/dev/null 2>&1; then
+        ip6tables-restore < "$IP6T_BAK" 2>/dev/null || true
+    else
+        if command -v ip6tables >/dev/null 2>&1; then
+            ip6tables -P INPUT ACCEPT 2>/dev/null || true
+            ip6tables -P FORWARD ACCEPT 2>/dev/null || true
+            ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
+            ip6tables -F 2>/dev/null || true
+        fi
+    fi
+}
+
+# killswitch: only tor user + loopback can go out, rest is dropped
+enable_killswitch() {
+    echo -e "${WHITE}🔹 Enabling kill-switch...${RESET}"
+    mkdir -p "$STATE_DIR"
+    if ! have_iptables; then
+        echo -e "${YELLOW}⚠ iptables missing, using ufw only (weaker)${RESET}"
+        if command -v ufw >/dev/null 2>&1; then
+            ufw --force enable >/dev/null 2>&1 || true
+            ufw default deny outgoing >/dev/null 2>&1 || true
+            ufw default deny incoming >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+
+    # save once
+    if [[ ! -f "$IPT_BAK" ]]; then
+        iptables-save > "$IPT_BAK" 2>/dev/null || true
+    fi
+    if command -v ip6tables-save >/dev/null 2>&1 && [[ ! -f "$IP6T_BAK" ]]; then
+        ip6tables-save > "$IP6T_BAK" 2>/dev/null || true
+    fi
+
+    local tor_uid=$(get_tor_uid)
+
+    iptables -F
+    iptables -X
+    iptables -P INPUT DROP
+    iptables -P FORWARD DROP
+    iptables -P OUTPUT DROP
+
+    iptables -A INPUT -i lo -j ACCEPT
+    iptables -A OUTPUT -o lo -j ACCEPT
+    iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+    # tor needs to reach guards on net
+    if [[ -n "$tor_uid" ]]; then
+        iptables -A OUTPUT -m owner --uid-owner "$tor_uid" -j ACCEPT
+    else
+        # fallback: allow tor ports to anywhere (better than nothing)
+        iptables -A OUTPUT -p tcp --dport 9001 -j ACCEPT
+        iptables -A OUTPUT -p tcp --dport 9030 -j ACCEPT
+        iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+        iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+    fi
+
+    # dhcp so we dont lose ip on laptop
+    iptables -A OUTPUT -p udp --dport 67:68 --sport 67:68 -j ACCEPT
+    iptables -A INPUT -p udp --sport 67:68 --dport 67:68 -j ACCEPT
+
+    # dns only to localhost tor + our anon servers, rest blocked
+    iptables -A OUTPUT -d 127.0.0.1 -p udp --dport $DNS_PORT -j ACCEPT
+    for dns in "${DNS_SERVERS[@]}"; do
+        iptables -A OUTPUT -d "$dns" -p udp --dport 53 -j ACCEPT
+        iptables -A OUTPUT -d "$dns" -p tcp --dport 53 -j ACCEPT
+    done
+
+    disable_ipv6
+}
+
+disable_killswitch() {
+    echo -e "${WHITE}🔹 Removing kill-switch...${RESET}"
+    if have_iptables; then
+        if [[ -f "$IPT_BAK" ]]; then
+            iptables-restore < "$IPT_BAK" 2>/dev/null || {
+                iptables -P INPUT ACCEPT
+                iptables -P FORWARD ACCEPT
+                iptables -P OUTPUT ACCEPT
+                iptables -F
+                iptables -X
+            }
+            rm -f "$IPT_BAK"
+        else
+            iptables -P INPUT ACCEPT
+            iptables -P FORWARD ACCEPT
+            iptables -P OUTPUT ACCEPT
+            iptables -F
+            iptables -X
+        fi
+        rm -f "$IP6T_BAK"
+    fi
+    restore_ipv6
+    if command -v ufw >/dev/null 2>&1; then
+        ufw default allow outgoing >/dev/null 2>&1 || true
+        ufw default deny incoming >/dev/null 2>&1 || true
+    fi
+}
+
+# save clear ip before we go dark, so leak test can compare
+save_clear_ip() {
+    mkdir -p "$STATE_DIR"
+    local ip=$(curl --max-time 8 -s https://api.ipify.org 2>/dev/null || curl --max-time 8 -s https://ifconfig.me 2>/dev/null || echo "")
+    if [[ -n "$ip" ]]; then
+        echo "$ip" > "$CLEAR_IP_FILE"
+    fi
+}
+
+get_tor_ip() {
+    curl --max-time 15 --socks5 127.0.0.1:$TOR_PORT -s "https://check.torproject.org/api/ip" 2>/dev/null | grep -o '"IP":"[^"]*' | cut -d'"' -f4
+}
+
 # Verify Tor
 check_tor() {
     echo -e "${WHITE}🔹 Verifying Tor...${RESET}"
@@ -154,6 +316,87 @@ check_tor() {
     return 1
 }
 
+# quick leak check: tor ip vs clear ip + dns + ipv6 + firewall
+check_leaks() {
+    echo -e "${BLUE}${BOLD}════ Leak check ════${RESET}"
+    local fail=0
+
+    local tor_ip=$(get_tor_ip)
+    if [[ -z "$tor_ip" ]]; then
+        echo -e "${RED}✖ no tor ip, tor socks down${RESET}"
+        fail=1
+    else
+        echo -e "${GREEN}✓ tor ip: $tor_ip${RESET}"
+    fi
+
+    if [[ -f "$CLEAR_IP_FILE" ]]; then
+        local clear_ip=$(cat "$CLEAR_IP_FILE")
+        if [[ -n "$clear_ip" && -n "$tor_ip" ]]; then
+            if [[ "$clear_ip" == "$tor_ip" ]]; then
+                echo -e "${RED}✖ LEAK: tor ip == clear ip ($clear_ip)${RESET}"
+                fail=1
+            else
+                echo -e "${GREEN}✓ tor ip differs from clear ip ($clear_ip)${RESET}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}⚠ no clear ip saved, skipping compare${RESET}"
+    fi
+
+    # dns should be anon servers only
+    local dns=$(grep nameserver "$RESOLV_FILE" 2>/dev/null | awk '{print $2}')
+    echo -e "${WHITE}dns: $(echo $dns | tr '\n' ' ')${RESET}"
+    if echo "$dns" | grep -q "192.168\|10\.\|172\.\|127.0.0.53"; then
+        echo -e "${RED}✖ dns looks like local/isp, possible leak${RESET}"
+        fail=1
+    else
+        echo -e "${GREEN}✓ dns looks ok${RESET}"
+    fi
+
+    # ipv6 should be off
+    if [[ -f /proc/net/if_inet6 ]] && [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) != "1" ]]; then
+        echo -e "${YELLOW}⚠ ipv6 is on, can bypass tor${RESET}"
+    else
+        echo -e "${GREEN}✓ ipv6 blocked/off${RESET}"
+    fi
+
+    # killswitch check
+    if have_iptables; then
+        if iptables -L OUTPUT -n 2>/dev/null | grep -q "DROP\|REJECT"; then
+            echo -e "${GREEN}✓ firewall kill-switch active${RESET}"
+        else
+            echo -e "${YELLOW}⚠ kill-switch not active${RESET}"
+        fi
+    fi
+
+    if [[ $fail -eq 0 ]]; then
+        echo -e "${GREEN}✓ no obvious leaks${RESET}"
+    else
+        echo -e "${RED}✖ leaks found, check above${RESET}"
+    fi
+    return $fail
+}
+
+# cut everything now, for emergencies
+panic_mode() {
+    echo -e "${RED}${BOLD}!! PANIC: cutting network !!${RESET}"
+    if have_iptables; then
+        iptables -P INPUT DROP
+        iptables -P FORWARD DROP
+        iptables -P OUTPUT DROP
+        iptables -F
+        iptables -X
+    fi
+    if command -v ip6tables >/dev/null 2>&1; then
+        ip6tables -P INPUT DROP 2>/dev/null || true
+        ip6tables -P FORWARD DROP 2>/dev/null || true
+        ip6tables -P OUTPUT DROP 2>/dev/null || true
+    fi
+    systemctl stop tor 2>/dev/null || service tor stop 2>/dev/null || true
+    echo -e "${YELLOW}net cut. run disable (option 2) to restore.${RESET}"
+    echo "panic $(date)" >> "$LOG_FILE" 2>/dev/null || true
+}
+
 # Enable anonymity
 enable_anon() {
     if ! check_internet; then
@@ -162,8 +405,8 @@ enable_anon() {
     fi
 
     # dont run twice by mistake
-    if [[ -f "$RESOLV_BAK" ]] && grep -q "1.1.1.1" "$RESOLV_FILE" 2>/dev/null; then
-        echo -e "${YELLOW}⚠ Anonymity already looks enabled${RESET}"
+    if [[ -f "$STATE_FILE" ]] && grep -q "enabled" "$STATE_FILE" 2>/dev/null; then
+        echo -e "${YELLOW}⚠ Anonymity already enabled${RESET}"
     fi
 
     echo -e "${BLUE}${BOLD}🔹 Enabling anonymity mode...${RESET}"
@@ -173,21 +416,27 @@ enable_anon() {
         return 1
     }
 
+    save_clear_ip
     backup_once "$RESOLV_FILE" "$RESOLV_BAK"
-    printf "nameserver %s\n" "${DNS_SERVERS[@]}" > "$RESOLV_FILE"
+    unlock_dns
+    lock_dns
 
     setup_tor
     setup_proxychains
 
-    # make sure firewall is on, tor socks is local only so no need to open ports
-    echo -e "${WHITE}🔹 Configuring firewall...${RESET}"
+    # firewall kill-switch, tor socks is local only so no need to open ports
+    enable_killswitch
     if command -v ufw >/dev/null 2>&1; then
         ufw --force enable >/dev/null 2>&1 || true
     fi
 
+    echo "enabled $(date)" > "$STATE_FILE"
+
     if check_tor; then
         echo -e "${GREEN}✓ Anonymity enabled${RESET}"
         show_status
+        check_leaks || true
+        echo -e "${YELLOW}tip: use proxychains4 for apps, else kill-switch will block them (thats normal)${RESET}"
         return 0
     else
         echo -e "${RED}✖ Setup failed${RESET}"
@@ -200,9 +449,13 @@ enable_anon() {
 disable_anon() {
     echo -e "${BLUE}${BOLD}🔹 Disabling anonymity mode...${RESET}"
 
+    unlock_dns
     [[ -f "$RESOLV_BAK" ]] && mv "$RESOLV_BAK" "$RESOLV_FILE" 2>/dev/null
     [[ -f "$TOR_BAK" ]] && mv "$TOR_BAK" "$TOR_CONF" 2>/dev/null
     [[ -f "$PROXY_BAK" ]] && mv "$PROXY_BAK" "$PROXYCHAINS_CONF" 2>/dev/null
+
+    disable_killswitch
+    rm -f "$STATE_FILE" "$CLEAR_IP_FILE"
 
     if [[ -f "$TOR_CONF" ]]; then
         if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
@@ -217,7 +470,7 @@ disable_anon() {
     if check_internet; then
         echo -e "${GREEN}✓ Normal mode restored${RESET}"
     else
-        echo -e "${YELLOW}⚠ Check network settings${RESET}"
+        echo -e "${YELLOW}⚠ Check network settings, you may need to reboot if panic was used${RESET}"
     fi
 }
 
@@ -226,6 +479,12 @@ show_status() {
     echo -e "${BLUE}${BOLD}════════════ System Status ════════════${RESET}"
     printf "${WHITE}%-20s: %s${RESET}\n" "Version" "$VERSION"
     printf "${WHITE}%-20s: %s${RESET}\n" "Interface" "$INTERFACE"
+
+    if [[ -f "$STATE_FILE" ]]; then
+        printf "${WHITE}%-20s: %s${RESET}\n" "Mode" "$(cat $STATE_FILE)"
+    else
+        printf "${WHITE}%-20s: %s${RESET}\n" "Mode" "normal"
+    fi
 
     local tor_status="inactive"
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
@@ -236,11 +495,16 @@ show_status() {
     printf "${WHITE}%-20s: %s${RESET}\n" "Tor Service" "$tor_status"
 
     if [[ "$tor_status" == "active" ]]; then
-        local tor_ip=$(curl --max-time 10 --socks5 127.0.0.1:$TOR_PORT -s "https://check.torproject.org/api/ip" 2>/dev/null | grep -o '"IP":"[^"]*' | cut -d'"' -f4)
+        local tor_ip=$(get_tor_ip)
         [[ -n "$tor_ip" ]] && printf "${WHITE}%-20s: %s${RESET}\n" "Tor IP" "$tor_ip"
     fi
 
     printf "${WHITE}%-20s: %s${RESET}\n" "DNS Servers" "$(grep nameserver "$RESOLV_FILE" 2>/dev/null | cut -d' ' -f2 | tr '\n' ' ')"
+    if [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) == "1" ]]; then
+        printf "${WHITE}%-20s: %s${RESET}\n" "IPv6" "disabled"
+    else
+        printf "${WHITE}%-20s: %s${RESET}\n" "IPv6" "on"
+    fi
     echo -e "${BLUE}${BOLD}═══════════════════════════════════════${RESET}"
 }
 
@@ -260,15 +524,19 @@ main_menu() {
         echo -e "${WHITE}[1] Enable Anonymity"
         echo -e "[2] Disable Anonymity"
         echo -e "[3] Show Status"
-        echo -e "[4] Exit${RESET}"
+        echo -e "[4] Leak check"
+        echo -e "[5] Panic (cut net)"
+        echo -e "[6] Exit${RESET}"
         echo -e "${BLUE}${BOLD}════════════════════════════════════${RESET}"
 
-        read -rp "Select option [1-4]: " choice
+        read -rp "Select option [1-6]: " choice
         case $choice in
             1) enable_anon ;;
             2) disable_anon ;;
             3) show_status ;;
-            4) exit 0 ;;
+            4) check_leaks ;;
+            5) panic_mode ;;
+            6) exit 0 ;;
             *) echo -e "${RED}✖ Invalid option${RESET}" ;;
         esac
         read -rp "Press Enter to continue..." _
@@ -276,11 +544,13 @@ main_menu() {
 }
 
 show_help() {
-    echo "Usage: sudo ./Anonyx.sh [--enable|--disable|--status|--help]"
+    echo "Usage: sudo ./Anonyx.sh [--enable|--disable|--status|--leaktest|--panic|--help]"
     echo "  no args      open menu"
-    echo "  --enable     enable anonymity"
+    echo "  --enable     enable anonymity + killswitch"
     echo "  --disable    restore normal settings"
     echo "  --status     show tor + dns status"
+    echo "  --leaktest   check for ip/dns/ipv6 leaks"
+    echo "  --panic      cut all net immediately"
 }
 
 # Main execution
@@ -293,6 +563,8 @@ case "${1:-}" in
     --enable|-e) enable_anon; exit $? ;;
     --disable|-d) disable_anon; exit $? ;;
     --status|-s) show_status; exit 0 ;;
+    --leaktest|-l) check_leaks; exit $? ;;
+    --panic) panic_mode; exit 0 ;;
     --help|-h) show_help; exit 0 ;;
     "") main_menu ;;
     *) echo -e "${RED}✖ Unknown option: $1${RESET}"; show_help; exit 1 ;;

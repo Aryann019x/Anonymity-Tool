@@ -1,12 +1,12 @@
 #!/bin/bash
 # ───────────────────────────────────────────────────────────────────────────
-# Anonymity Tool Anonyx v1.1
+# Anonymity Tool Anonyx v1.2
 # Kali Linux
 # Created by Aryann019x
 # A robust tool for anonymous operations
 # ───────────────────────────────────────────────────────────────────────────
 
-VERSION="1.1v"
+VERSION="1.2"
 TOR_PORT=9050
 CONTROL_PORT=9051
 DNS_SERVERS=("1.1.1.1" "9.9.9.9" "208.67.222.222")
@@ -25,15 +25,16 @@ BOLD="\e[1m"
 LOG_FILE="/var/log/anonymity.log"
 PROXYCHAINS_CONF="/etc/proxychains4.conf"
 RESOLV_FILE="/etc/resolv.conf"
-RESOLV_BAK="/etc/resolv.conf.bak"
+RESOLV_BAK="/etc/resolv.conf.bak.anonyx"
 TOR_CONF="/etc/tor/torrc"
+TOR_BAK="/etc/tor/torrc.bak.anonyx"
+PROXY_BAK="/etc/proxychains4.conf.bak.anonyx"
 
-# Error handling
+# Error handling - just log it, dont spam on expected fails
 handle_error() {
     echo -e "${YELLOW}⚠ Warning at line $1: $2${RESET}"
     return $3
 }
-trap 'handle_error $LINENO "$BASH_COMMAND" $?' ERR
 
 # Check root
 check_root() {
@@ -45,11 +46,18 @@ check_root() {
 
 # Initialize logging
 init_logging() {
-    mkdir -p $(dirname "$LOG_FILE") 2>/dev/null
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
     exec 1> >(tee -a "$LOG_FILE")
     exec 2> >(tee -a "$LOG_FILE" >&2)
     chmod 600 "$LOG_FILE" 2>/dev/null
     echo -e "\n${BLUE}${BOLD}=== Session Started: $(date) ===${RESET}"
+}
+
+# backup file once, dont overwrite good backup
+backup_once() {
+    if [[ -f "$1" && ! -f "$2" ]]; then
+        cp "$1" "$2" 2>/dev/null
+    fi
 }
 
 # Get network interface
@@ -75,6 +83,10 @@ check_internet() {
     if ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1 || ping -c 1 -W 5 1.1.1.1 >/dev/null 2>&1; then
         return 0
     fi
+    # ping is blocked on some networks, try curl as fallback
+    if check_cmd curl >/dev/null 2>&1 && curl --max-time 5 -s https://1.1.1.1 >/dev/null 2>&1; then
+        return 0
+    fi
     return 1
 }
 
@@ -92,6 +104,7 @@ install_packages() {
 setup_tor() {
     echo -e "${WHITE}🔹 Setting up Tor...${RESET}"
     mkdir -p /etc/tor
+    backup_once "$TOR_CONF" "$TOR_BAK"
     cat > "$TOR_CONF" << EOF
 SocksPort $TOR_PORT
 ControlPort $CONTROL_PORT
@@ -99,13 +112,18 @@ DataDirectory /var/lib/tor
 RunAsDaemon 1
 EOF
     chmod 644 "$TOR_CONF"
-    systemctl restart tor || service tor restart
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl restart tor
+    else
+        service tor restart
+    fi
     sleep 3
 }
 
 # Configure ProxyChains
 setup_proxychains() {
     echo -e "${WHITE}🔹 Configuring ProxyChains...${RESET}"
+    backup_once "$PROXYCHAINS_CONF" "$PROXY_BAK"
     cat > "$PROXYCHAINS_CONF" << EOF
 strict_chain
 proxy_dns
@@ -124,12 +142,13 @@ check_tor() {
     echo -e "${WHITE}🔹 Verifying Tor...${RESET}"
     local attempts=0
     while ((attempts < 3)); do
-        if curl --socks5 localhost:$TOR_PORT -s "https://check.torproject.org/api/ip" | grep -q '"IsTor":true'; then
+        if curl --max-time 15 --socks5 127.0.0.1:$TOR_PORT -s "https://check.torproject.org/api/ip" | grep -q '"IsTor":true'; then
             echo -e "${GREEN}✓ Tor connection verified${RESET}"
             return 0
         fi
         ((attempts++))
-        sleep 3
+        echo -e "${WHITE}retrying... ($attempts/3)${RESET}"
+        sleep 5
     done
     echo -e "${RED}✖ Tor verification failed${RESET}"
     return 1
@@ -142,20 +161,29 @@ enable_anon() {
         return 1
     fi
 
+    # dont run twice by mistake
+    if [[ -f "$RESOLV_BAK" ]] && grep -q "1.1.1.1" "$RESOLV_FILE" 2>/dev/null; then
+        echo -e "${YELLOW}⚠ Anonymity already looks enabled${RESET}"
+    fi
+
     echo -e "${BLUE}${BOLD}🔹 Enabling anonymity mode...${RESET}"
-    
-    install_packages
-    cp "$RESOLV_FILE" "$RESOLV_BAK" 2>/dev/null
+
+    install_packages || {
+        echo -e "${RED}✖ Setup aborted, packages missing${RESET}"
+        return 1
+    }
+
+    backup_once "$RESOLV_FILE" "$RESOLV_BAK"
     printf "nameserver %s\n" "${DNS_SERVERS[@]}" > "$RESOLV_FILE"
-    
+
     setup_tor
     setup_proxychains
-    
-    # Enable UFW and allow Tor ports
+
+    # make sure firewall is on, tor socks is local only so no need to open ports
     echo -e "${WHITE}🔹 Configuring firewall...${RESET}"
-    sudo ufw enable
-    sudo ufw allow 9050/tcp
-    sudo ufw allow 9051/tcp
+    if command -v ufw >/dev/null 2>&1; then
+        ufw --force enable >/dev/null 2>&1 || true
+    fi
 
     if check_tor; then
         echo -e "${GREEN}✓ Anonymity enabled${RESET}"
@@ -171,14 +199,20 @@ enable_anon() {
 # Disable anonymity
 disable_anon() {
     echo -e "${BLUE}${BOLD}🔹 Disabling anonymity mode...${RESET}"
-    
-    [[ -f "$RESOLV_BAK" ]] && mv "$RESOLV_BAK" "$RESOLV_FILE"
-    systemctl stop tor 2>/dev/null || service tor stop 2>/dev/null
 
-    # Delete UFW rules for Tor ports
-    echo -e "${WHITE}🔹 Configuring firewall...${RESET}"
-    sudo ufw delete allow 9050/tcp
-    sudo ufw delete allow 9051/tcp
+    [[ -f "$RESOLV_BAK" ]] && mv "$RESOLV_BAK" "$RESOLV_FILE" 2>/dev/null
+    [[ -f "$TOR_BAK" ]] && mv "$TOR_BAK" "$TOR_CONF" 2>/dev/null
+    [[ -f "$PROXY_BAK" ]] && mv "$PROXY_BAK" "$PROXYCHAINS_CONF" 2>/dev/null
+
+    if [[ -f "$TOR_CONF" ]]; then
+        if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+            systemctl restart tor 2>/dev/null || systemctl stop tor 2>/dev/null || true
+        else
+            service tor restart 2>/dev/null || service tor stop 2>/dev/null || true
+        fi
+    else
+        systemctl stop tor 2>/dev/null || service tor stop 2>/dev/null || true
+    fi
 
     if check_internet; then
         echo -e "${GREEN}✓ Normal mode restored${RESET}"
@@ -192,16 +226,20 @@ show_status() {
     echo -e "${BLUE}${BOLD}════════════ System Status ════════════${RESET}"
     printf "${WHITE}%-20s: %s${RESET}\n" "Version" "$VERSION"
     printf "${WHITE}%-20s: %s${RESET}\n" "Interface" "$INTERFACE"
-    
+
     local tor_status="inactive"
-    pgrep -x tor >/dev/null && tor_status="active"
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl is-active --quiet tor && tor_status="active"
+    else
+        pgrep -x tor >/dev/null 2>&1 && tor_status="active"
+    fi
     printf "${WHITE}%-20s: %s${RESET}\n" "Tor Service" "$tor_status"
-    
+
     if [[ "$tor_status" == "active" ]]; then
-        local tor_ip=$(curl --socks5 localhost:$TOR_PORT -s "https://check.torproject.org/api/ip" 2>/dev/null | grep -o '"IP":"[^"]*' | cut -d'"' -f4)
+        local tor_ip=$(curl --max-time 10 --socks5 127.0.0.1:$TOR_PORT -s "https://check.torproject.org/api/ip" 2>/dev/null | grep -o '"IP":"[^"]*' | cut -d'"' -f4)
         [[ -n "$tor_ip" ]] && printf "${WHITE}%-20s: %s${RESET}\n" "Tor IP" "$tor_ip"
     fi
-    
+
     printf "${WHITE}%-20s: %s${RESET}\n" "DNS Servers" "$(grep nameserver "$RESOLV_FILE" 2>/dev/null | cut -d' ' -f2 | tr '\n' ' ')"
     echo -e "${BLUE}${BOLD}═══════════════════════════════════════${RESET}"
 }
@@ -224,8 +262,8 @@ main_menu() {
         echo -e "[3] Show Status"
         echo -e "[4] Exit${RESET}"
         echo -e "${BLUE}${BOLD}════════════════════════════════════${RESET}"
-        
-        read -p "Select option [1-4]: " choice
+
+        read -rp "Select option [1-4]: " choice
         case $choice in
             1) enable_anon ;;
             2) disable_anon ;;
@@ -233,8 +271,16 @@ main_menu() {
             4) exit 0 ;;
             *) echo -e "${RED}✖ Invalid option${RESET}" ;;
         esac
-        read -p "Press Enter to continue..."
+        read -rp "Press Enter to continue..." _
     done
+}
+
+show_help() {
+    echo "Usage: sudo ./Anonyx.sh [--enable|--disable|--status|--help]"
+    echo "  no args      open menu"
+    echo "  --enable     enable anonymity"
+    echo "  --disable    restore normal settings"
+    echo "  --status     show tor + dns status"
 }
 
 # Main execution
@@ -242,4 +288,12 @@ check_root
 init_logging
 INTERFACE=$(get_interface)
 trap cleanup EXIT
-main_menu
+
+case "${1:-}" in
+    --enable|-e) enable_anon; exit $? ;;
+    --disable|-d) disable_anon; exit $? ;;
+    --status|-s) show_status; exit 0 ;;
+    --help|-h) show_help; exit 0 ;;
+    "") main_menu ;;
+    *) echo -e "${RED}✖ Unknown option: $1${RESET}"; show_help; exit 1 ;;
+esac

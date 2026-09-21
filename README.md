@@ -1,14 +1,20 @@
-# Anonymity Tool Anonyx v1.2
+# Anonymity Tool Anonyx v2.0
 
 ## Overview
-Anonyx is a simple anonymity tool for Kali Linux or any other Debian-based distro. It automates Tor, Proxychains and secure DNS setup so you can browse more privately.
+Anonyx is a simple anonymity tool for Kali / Debian. It routes stuff through Tor, locks DNS, blocks ipv6 leaks and has a kill-switch so if Tor dies your clear IP doesnt leak out.
+
+Not magic though - your ISP still sees youre using Tor, and if you login to your real accounts Tor wont hide you. This just makes accidental leaks much harder.
 
 ## Features
-- Installs and configures Tor, Proxychains and secure DNS.
-- Backs up your original configs before changing anything.
-- Simple menu + cli flags to enable / disable anonymity.
-- Checks if Tor is actually working before saying done.
-- Logs to /var/log/anonymity.log for debugging.
+- Sets up Tor with safer torrc (socks + dnsport, no disk writes, localhost only).
+- Kill-switch with iptables: only tor user + loopback can go out.
+- Locks resolv.conf so NetworkManager doesnt revert it.
+- Blocks ipv6 (biggest bypass for tor socks).
+- Backs up everything before changing.
+- Leak check (tor ip vs clear ip, dns, ipv6, firewall).
+- Panic mode to cut net instantly.
+- Menu + cli flags.
+- Logs to /var/log/anonymity.log.
 
 ## Prerequisites
 - Kali Linux or any Debian-based distro.
@@ -29,86 +35,77 @@ Anonyx is a simple anonymity tool for Kali Linux or any other Debian-based distr
     ```bash
     sudo ./Anonyx.sh
     ```
-    You can also run it directly:
+    Or direct:
     ```bash
     sudo ./Anonyx.sh --enable
     sudo ./Anonyx.sh --status
+    sudo ./Anonyx.sh --leaktest
     sudo ./Anonyx.sh --disable
+    sudo ./Anonyx.sh --panic
     ```
 ## Menu Options
 
-**[1] Enable Anonymity**: Sets up Tor + proxychains + anon DNS.  
-**[2] Disable Anonymity**: Restores your old configs.  
-**[3] Show Status**: Shows tor service, tor IP and DNS.  
-**[4] Exit**: Exits the tool.
+**[1] Enable**: Tor + proxychains + dns + kill-switch.  
+**[2] Disable**: Restores old configs + firewall.  
+**[3] Show Status**: tor, ips, dns, ipv6.  
+**[4] Leak check**: compares tor ip vs clear ip, checks dns/ipv6.  
+**[5] Panic**: cuts all net right now.  
+**[6] Exit**.
 
 ## Tool Specifications
-- Tor Port: 9050
-- Control Port: 9051
-- DNS Servers:
+- Socks: 127.0.0.1:9050
+- DNSPort: 127.0.0.1:5353
+- TransPort: 127.0.0.1:9040
+- Control: 9051
+- DNS:
   - 1.1.1.1
   - 9.9.9.9
   - 208.67.222.222
 
 - **Files used**
   - Log: `/var/log/anonymity.log`
-  - Proxychains: `/etc/proxychains4.conf` (backup at `/etc/proxychains4.conf.bak.anonyx`)
-  - DNS: `/etc/resolv.conf` (backup at `/etc/resolv.conf.bak.anonyx`)
-  - Tor: `/etc/tor/torrc` (backup at `/etc/tor/torrc.bak.anonyx`)
+  - State: `/var/lib/anonyx/` (iptables backup, clear ip)
+  - Proxychains: `/etc/proxychains4.conf` (backup `.bak.anonyx`)
+  - DNS: `/etc/resolv.conf` (backup `.bak.anonyx`, locked with chattr)
+  - Tor: `/etc/tor/torrc` (backup `.bak.anonyx`)
 
-## How to check if its working
-- Enable it:
+## How to use right
+Enable, then **always use proxychains**:
 
 ```bash
-sudo ./Anonyx.sh
-# pick [1]
+sudo ./Anonyx.sh --enable
+proxychains4 curl https://check.torproject.org/api/ip
+sudo ./Anonyx.sh --leaktest
 ```
 
-**Check Tor**:
-```bash
-proxychains4 curl https://check.torproject.org
-```
-Should say you are using Tor.
+Without proxychains most apps will just fail to connect - thats the kill-switch working, not a bug.
 
-**Tor service**:
-```bash
-sudo systemctl status tor
-```
-
-**DNS**:
+Check:
 ```bash
 cat /etc/resolv.conf
-```
-Should show:
-```
-nameserver 1.1.1.1
-nameserver 9.9.9.9
-nameserver 208.67.222.222
-```
-
-**Firewall**:
-```bash
-sudo ufw status verbose
+# should be 1.1.1.1 etc, not 192.168.x or 127.0.0.53
+sudo iptables -L OUTPUT -n | head
+# should show DROP + tor uid rule
+cat /proc/sys/net/ipv6/conf/all/disable_ipv6
+# should be 1
 ```
 
 ## Disable it
 ```bash
-sudo ./Anonyx.sh
-# pick [2]
+sudo ./Anonyx.sh --disable
 ```
-Then check:
-```bash
-cat /etc/resolv.conf
-curl https://www.example.com
-```
-DNS should be back to normal and net should work.
+Restores resolv.conf, torrc, proxychains, iptables and ipv6.
 
-All runs are logged in `/var/log/anonymity.log`.
+If you used panic, run disable after to get net back. Reboot also clears it.
 
-## Notes
-- Tor socks runs on localhost so no need to open 9050/9051 in ufw. Script just makes sure ufw is enabled.
-- If ping is blocked on your network the script falls back to curl for the net check.
-- If you ran v1.1 before, old `/etc/resolv.conf.bak` is left alone, new backups use `.bak.anonyx`.
+All runs logged in `/var/log/anonymity.log`.
+
+## Notes / limits
+- Kill-switch allows tor user + dhcp + lo only. Normal clearnet browsing is blocked on purpose while enabled.
+- Ipv6 is disabled while enabled, restored after.
+- ISP / college / govt can still see youre using Tor (thats how Tor works). Dont login to personal accounts if you need anonymity.
+- Tested on Kali + Debian with systemd. On WSL / non-systemd it falls back to `service tor`.
+- If you ran v1.x before, backups now use `.bak.anonyx` + `/var/lib/anonyx`.
 
 ## CONTRIBUTING
 Found a bug or want something added? Open an issue or send a PR.

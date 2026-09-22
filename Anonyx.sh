@@ -1,6 +1,6 @@
 #!/bin/bash
 # ───────────────────────────────────────────────────────────────────────────
-# Anonymity Tool Anonyx v2.0
+# Anonymity Tool Anonyx v2.1
 # Kali Linux
 # Created by Aryann019x
 # A robust tool for anonymous operations

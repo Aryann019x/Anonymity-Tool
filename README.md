@@ -1,102 +1,123 @@
 <div align="center">
 
 # 🕵️ Anonyx
-### stay private on Kali / Debian with Tor + kill-switch
 
-[![version](https://img.shields.io/badge/version-2.1-blue)](./Anonyx.sh)
-[![bash](https://img.shields.io/badge/bash-5.x-green?logo=gnubash)](./Anonyx.sh)
-[![tor](https://img.shields.io/badge/tor-enabled-purple?logo=tor)](https://www.torproject.org/)
-[![kali](https://img.shields.io/badge/kali-linux-268BDF?logo=kalilinux)](https://www.kali.org/)
-[![license](https://img.shields.io/badge/license-MIT-yellow)](./LICENSE)
+**Tor anonymity toolkit for Kali & Debian — kill-switch, DNS lock, IPv6 block, leak checks and panic mode.**
 
-![typing](https://readme-typing-svg.herokuapp.com?font=Fira+Code&pause=1000&color=7A5CFF&center=true&vCenter=true&width=500&lines=route+via+tor;block+clearnet+leaks;check+for+dns+%2B+ipv6+leaks;panic+mode+when+needed)
+[![Shell](https://img.shields.io/badge/Shell-100%25-green?logo=gnubash&logoColor=white)](./Anonyx.sh)
+[![Version](https://img.shields.io/badge/version-2.1-blue)](./Anonyx.sh)
+[![License](https://img.shields.io/github/license/Aryann019x/Anonymity-Tool)](./LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/Aryann019x/Anonymity-Tool)](https://github.com/Aryann019x/Anonymity-Tool/commits/main)
+[![Stars](https://img.shields.io/github/stars/Aryann019x/Anonymity-Tool?style=social)](https://github.com/Aryann019x/Anonymity-Tool/stargazers)
+[![Forks](https://img.shields.io/github/forks/Aryann019x/Anonymity-Tool?style=social)](https://github.com/Aryann019x/Anonymity-Tool/forks)
+[![Issues](https://img.shields.io/github/issues/Aryann019x/Anonymity-Tool)](https://github.com/Aryann019x/Anonymity-Tool/issues)
 
-```text
-  ___    _   _____  _   ___   ____  __
- / _ \  / | / / _ \/ | / / | / / / / /
-/ / / |/  |/ / / / /  |/ /  |/ / / / /
-/ /_/ / /|  / /_/ / /|  / /|  / /_/ /
-\____/_/ |_/\____/_/ |_/_/ |_/\____/
-         stay anonymous. stay free.
-```
+`Kali` • `Debian` • `Tor` • `iptables` • `proxychains`
 
-[Quick start](#-quick-start) • [How it works](#-how-it-works) • [Menu](#-menu) • [Leak check](#-leak-check) • [Troubleshooting](#-troubleshooting)
+[Quick Start](#-quick-start) •
+[How It Works](#-how-it-works) •
+[Usage](#-usage) •
+[Leak Check](#-leak-check) •
+[Troubleshooting](#-troubleshooting)
 
 </div>
 
 ---
 
-## ✨ what it does
+## ✨ Features
 
-| thing | how |
-|---|---|
-| 🧅 tor routing | socks `127.0.0.1:9050`, dnsport `5353`, hardened torrc |
-| 🧱 kill-switch | iptables: only `debian-tor` + lo out, rest DROP. clearnet just fails (thats good) |
-| 🔒 dns lock | writes anon dns + `chattr +i` so NetworkManager cant revert it |
-| 🚫 ipv6 block | sysctl disable + ip6tables DROP, restored on disable |
-| 🔍 leak check | tor ip vs clear ip, dns, ipv6, firewall proof |
-| 🔄 new identity | restarts tor for fresh circuit / ip |
-| 🚨 panic | cuts all net instantly |
-| 💾 safe | backs up everything to `*.bak.anonyx` + `/var/lib/anonyx` |
+- 🧅 **Tor routing** — hardened `torrc`, SOCKS on `127.0.0.1:9050`, localhost only
+- 🧱 **Kill-switch** — iptables allows only `debian-tor` + loopback out, rest `DROP`
+- 🔒 **DNS lock** — anon DNS + `chattr +i` so NetworkManager can't revert it
+- 🚫 **IPv6 block** — disabled via sysctl + ip6tables while enabled
+- 🔍 **Leak checker** — Tor IP vs clear IP, DNS, IPv6 and firewall proof
+- 🔄 **New identity** — fresh Tor circuit / exit IP in one command
+- 🚨 **Panic mode** — cuts all networking instantly
+- 💾 **Safe by default** — backs up configs to `*.bak.anonyx`, auto-rollback on failure
+- 📝 **Logging** — everything goes to `/var/log/anonymity.log`
 
-> real talk: ISP / college still sees youre *using* Tor. And if you login to insta/gmail over Tor, youre not anon anymore. This tool stops accidental IP/DNS leaks, it doesnt make you invisible.
+> Be real: your ISP still sees you're using Tor, and logging into personal accounts kills anonymity. Anonyx stops accidental IP / DNS / IPv6 leaks — it doesn't make you invisible.
 
 ---
 
-## 🚀 quick start
+## 🚀 Quick Start
 
 ```bash
 git clone https://github.com/Aryann019x/Anonymity-Tool.git
 cd Anonymity-Tool
 chmod +x Anonyx.sh
 
+# interactive menu
+sudo ./Anonyx.sh
+
+# or direct
 sudo ./Anonyx.sh --enable
 proxychains4 curl https://check.torproject.org/api/ip
 sudo ./Anonyx.sh --leaktest
 ```
 
-more flags:
+Demo session:
 
 ```bash
-sudo ./Anonyx.sh --status    # tor + dns + ipv6 status
-sudo ./Anonyx.sh --newid     # new tor circuit / ip
-sudo ./Anonyx.sh --disable   # restore everything
-sudo ./Anonyx.sh --panic     # cut net NOW
+$ sudo ./Anonyx.sh --enable
+🔹 Checking internet connection...
+🔹 Enabling anonymity mode...
+🔹 Setting up Tor...
+🔹 Configuring ProxyChains...
+🔹 Enabling kill-switch...
+✓ Tor connection verified
+✓ Anonymity enabled
+tip: use proxychains4 for apps, else kill-switch will block them (thats normal)
+
+$ sudo ./Anonyx.sh --leaktest
+════ Leak check ════
+✓ tor ip: 185.220.x.x
+✓ tor ip differs from clear ip (103.44.x.x)
+✓ direct clearnet blocked (kill-switch working)
+✓ no ipv6 leak
+✓ no obvious leaks
 ```
 
 ---
 
-## 🧠 how it works
+## 🧠 How It Works
 
 ```mermaid
 flowchart LR
-    YOU[your apps] -->|must use proxychains| PX[proxychains<br/>127.0.0.1:9050]
-    PX --> TOR[tor daemon]
-    TOR --> NET[Tor network<br/>guard -> middle -> exit]
-    NET --> WEB[internet]
-    YOU -.->|blocked by iptables| CLEAR[clearnet ❌]
-    IPV6[ipv6] -.->|disabled| CLEAR
-    DNS[dns 1.1.1.1 etc<br/>locked] --> TOR
+    A[Your apps] -->|proxychains 127.0.0.1:9050| B[Tor daemon]
+    B --> C[Tor network]
+    C --> D[Internet]
+    A -. blocked by iptables .-> E[Clearnet]
+    F[IPv6] -. disabled .-> E
 ```
 
-1. saves your clear IP to `/var/lib/anonyx/clear_ip` for later compare
-2. backs up `torrc`, `proxychains4.conf`, `resolv.conf` once (wont overwrite good backup)
-3. writes hardened torrc + locks dns
-4. enables iptables kill-switch + disables ipv6
-5. verifies via `check.torproject.org/api/ip` — if fail, auto-rolls back
-6. on disable: restores files + iptables + ipv6
+1. Saves your clear IP for later comparison
+2. Backs up `torrc`, `proxychains4.conf` and `resolv.conf` once
+3. Writes hardened Tor config and locks DNS
+4. Enables iptables kill-switch and disables IPv6
+5. Verifies Tor via `check.torproject.org` — auto restores on failure
+6. On disable: restores files, firewall and IPv6
 
-> without `proxychains4` most apps will timeout while enabled. thats the kill-switch working, not a bug.
+Without `proxychains4` most apps will timeout while enabled. That's the kill-switch working, not a bug.
 
 ---
 
-## 🎛️ menu
+## 🎛️ Usage
+
+| Command | What it does |
+|---|---|
+| `sudo ./Anonyx.sh` | Open interactive menu |
+| `sudo ./Anonyx.sh --enable` | Enable anonymity + kill-switch |
+| `sudo ./Anonyx.sh --disable` | Restore normal settings |
+| `sudo ./Anonyx.sh --status` | Show Tor, DNS and IPv6 status |
+| `sudo ./Anonyx.sh --leaktest` | Check for IP / DNS / IPv6 leaks |
+| `sudo ./Anonyx.sh --newid` | Get a new Tor exit IP |
+| `sudo ./Anonyx.sh --panic` | Cut all network immediately |
+| `sudo ./Anonyx.sh --version` | Show version |
+
+Menu:
 
 ```text
-════════════════════════════════════
-  Anonymity Tool Anonyx 2.1
-  Created by: Aryann019x
-════════════════════════════════════
 [1] Enable Anonymity
 [2] Disable Anonymity
 [3] Show Status
@@ -104,97 +125,119 @@ flowchart LR
 [5] New identity
 [6] Panic (cut net)
 [7] Exit
-════════════════════════════════════
 ```
 
 ---
 
-## 🔍 leak check
+## 🔍 Leak Check
 
-`sudo ./Anonyx.sh --leaktest` shows something like:
+`sudo ./Anonyx.sh --leaktest` checks:
 
-```text
-════ Leak check ════
-✓ tor ip: 185.220.x.x
-✓ tor ip differs from clear ip (103.44.x.x)
-✓ dns looks ok
-✓ ipv6 blocked/off
-✓ firewall kill-switch active
-✓ direct clearnet blocked (kill-switch working)
-✓ no ipv6 leak
-✓ no obvious leaks
-```
+- Tor SOCKS is up and returns a Tor IP
+- Tor IP differs from your saved clear IP
+- DNS is anon servers only, not `192.168.x` / `127.0.0.53`
+- IPv6 is disabled and `api6.ipify.org` is unreachable
+- iptables is in `DROP` mode and direct clearnet fails
 
-if you see `✖ LEAK` or `direct net still works`, dont browse — run disable then enable again.
+If you see `✖ LEAK`, don't browse — run `--disable` then `--enable` again.
 
 ---
 
-## 🗂️ files
+## 🗂️ What It Touches
 
-- `Anonyx.sh` — the whole tool
-- log: `/var/log/anonymity.log`
-- state: `/var/lib/anonyx/` — `state`, `iptables.bak`, `clear_ip`
-- backups: `/etc/tor/torrc.bak.anonyx`, `/etc/proxychains4.conf.bak.anonyx`, `/etc/resolv.conf.bak.anonyx`
-- ports: socks `9050`, dns `5353`, trans `9040`, control `9051`
-- dns: `1.1.1.1`, `9.9.9.9`, `208.67.222.222`
+| Item | Value |
+|---|---|
+| SOCKS | `127.0.0.1:9050` |
+| DNSPort | `127.0.0.1:5353` |
+| TransPort | `127.0.0.1:9040` |
+| Control | `9051` |
+| DNS | `1.1.1.1`, `9.9.9.9`, `208.67.222.222` |
+| Log | `/var/log/anonymity.log` |
+| State | `/var/lib/anonyx/` |
+| Backups | `*.bak.anonyx` for torrc, proxychains, resolv.conf |
 
----
-
-## 🛠️ requirements
-
-- Kali or Debian-based, root (`sudo`)
-- systemd preferred, falls back to `service tor` on WSL / non-systemd
-- needs: `tor proxychains4 torsocks curl ufw iptables iproute2` (auto-installed)
+Requirements: Kali / Debian, root, `tor proxychains4 torsocks curl ufw iptables iproute2` (auto-installed). Systemd preferred, falls back to `service tor`.
 
 ---
 
-## ❓ troubleshooting
+## ⚖️ Anonyx vs VPN vs Tor Browser
+
+|  | Anonyx | VPN | Tor Browser |
+|---|---|---|---|
+| Hides IP from sites | Yes (via Tor) | Yes (via VPN server) | Yes |
+| ISP sees Tor usage | Yes | No (sees VPN) | Yes |
+| Kill-switch | Yes | Sometimes | No |
+| DNS / IPv6 protection | Yes | Varies | Yes |
+| No login tracking | You must still avoid logins | Same | Same |
+
+Use Anonyx for system-wide CLI work. Use Tor Browser for web. Don't mix identities.
+
+---
+
+## ❓ Troubleshooting
 
 <details>
-<summary><b>net doesnt work after enable?</b></summary>
+<summary><b>Internet doesn't work after --enable</b></summary>
 
-Normal if youre not using proxychains. Kill-switch blocks clearnet on purpose. Use `proxychains4 firefox` / `proxychains4 curl ...` or run `--leaktest` to confirm.
+Expected unless you use proxychains. Try `proxychains4 curl https://check.torproject.org/api/ip`. Clearnet is blocked on purpose.
 
 </details>
 
 <details>
-<summary><b>tor verification failed?</b></summary>
+<summary><b>Tor verification failed</b></summary>
 
-Wait 30s and retry — tor bootstrap is slow sometimes. Check `sudo systemctl status tor` and `/var/log/anonymity.log`. Tool auto-rolls back on fail.
-
-</details>
-
-<details>
-<summary><b>dns keeps reverting?</b></summary>
-
-Fixed in v2+ with `chattr +i`. If you edited resolv.conf manually, run `sudo chattr -i /etc/resolv.conf` then disable/enable again.
+Tor bootstrap is slow. Wait 30s, check `sudo systemctl status tor` and `/var/log/anonymity.log`. The tool auto-rolls back on failure.
 
 </details>
 
 <details>
-<summary><b>used panic, now no net?</b></summary>
+<summary><b>DNS keeps reverting</b></summary>
 
-Run `sudo ./Anonyx.sh --disable`. Reboot also clears iptables panic rules.
+v2+ locks it with `chattr +i`. If you edited it manually, run `sudo chattr -i /etc/resolv.conf` then disable / enable again.
 
 </details>
 
 <details>
-<summary><b>same IP after --newid?</b></summary>
+<summary><b>Used panic, now no network</b></summary>
 
-Tor exits are limited, sometimes you get same exit. Wait a bit and try again.
+Run `sudo ./Anonyx.sh --disable`. A reboot also clears panic rules.
+
+</details>
+
+<details>
+<summary><b>Same IP after --newid</b></summary>
+
+Exit pool is limited. Wait a bit and try again.
 
 </details>
 
 ---
 
-## 🤝 contributing
+## 🗺️ Roadmap
 
-found a bug? open an issue or PR. keep it simple, test on Kali VM if you touch iptables.
+- [x] Kill-switch + IPv6 block
+- [x] Leak checker + panic mode
+- [x] New identity
+- [ ] Transparent proxy (no proxychains prefix needed)
+- [ ] obfs4 bridge support for censored networks
+- [ ] Config file `/etc/anonyx.conf`
 
-## 👤 author
+---
+
+## 🤝 Contributing
+
+Found a bug? Open an issue or PR. If you touch iptables, please test in a Kali VM first.
+
+## 👤 Author
 
 **Aryann019x**
 
-## 📄 license
+## 📄 License
 
 MIT — see [LICENSE](./LICENSE)
+
+<div align="center">
+
+⭐ Star this repo if it helped you stay private.
+
+</div>

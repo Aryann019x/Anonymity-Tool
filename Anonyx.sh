@@ -7,7 +7,7 @@
 # Note: no tool gives 100% privacy, this just makes leaks much harder
 # ───────────────────────────────────────────────────────────────────────────
 
-VERSION="2.0"
+VERSION="2.1"
 TOR_PORT=9050
 CONTROL_PORT=9051
 DNS_PORT=5353
@@ -367,6 +367,19 @@ check_leaks() {
         else
             echo -e "${YELLOW}⚠ kill-switch not active${RESET}"
         fi
+        # proof: direct clearnet should fail when killswitch is on
+        if curl --max-time 5 -s https://api.ipify.org >/dev/null 2>&1; then
+            echo -e "${YELLOW}⚠ direct net still works (kill-switch weak/off)${RESET}"
+        else
+            echo -e "${GREEN}✓ direct clearnet blocked (kill-switch working)${RESET}"
+        fi
+    fi
+
+    # ipv6 external test, should fail when blocked
+    if curl --max-time 5 -s -6 https://api6.ipify.org >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ ipv6 net reachable, may bypass tor${RESET}"
+    else
+        echo -e "${GREEN}✓ no ipv6 leak${RESET}"
     fi
 
     if [[ $fail -eq 0 ]]; then
@@ -395,6 +408,31 @@ panic_mode() {
     systemctl stop tor 2>/dev/null || service tor stop 2>/dev/null || true
     echo -e "${YELLOW}net cut. run disable (option 2) to restore.${RESET}"
     echo "panic $(date)" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+# new circuit / new ip without full re-setup
+new_identity() {
+    echo -e "${WHITE}🔹 Getting new identity...${RESET}"
+    local old_ip=$(get_tor_ip)
+    [[ -n "$old_ip" ]] && echo -e "${WHITE}old ip: $old_ip${RESET}"
+
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl restart tor 2>/dev/null || service tor restart 2>/dev/null || true
+    else
+        service tor restart 2>/dev/null || true
+    fi
+    echo -e "${WHITE}waiting for tor...${RESET}"
+    sleep 7
+
+    local new_ip=$(get_tor_ip)
+    if [[ -z "$new_ip" ]]; then
+        echo -e "${RED}✖ couldnt get new ip, tor may still be starting${RESET}"
+        return 1
+    fi
+    echo -e "${GREEN}✓ new ip: $new_ip${RESET}"
+    if [[ "$old_ip" == "$new_ip" ]]; then
+        echo -e "${YELLOW}⚠ same as before, try again in a bit${RESET}"
+    fi
 }
 
 # Enable anonymity
@@ -525,18 +563,20 @@ main_menu() {
         echo -e "[2] Disable Anonymity"
         echo -e "[3] Show Status"
         echo -e "[4] Leak check"
-        echo -e "[5] Panic (cut net)"
-        echo -e "[6] Exit${RESET}"
+        echo -e "[5] New identity"
+        echo -e "[6] Panic (cut net)"
+        echo -e "[7] Exit${RESET}"
         echo -e "${BLUE}${BOLD}════════════════════════════════════${RESET}"
 
-        read -rp "Select option [1-6]: " choice
+        read -rp "Select option [1-7]: " choice
         case $choice in
             1) enable_anon ;;
             2) disable_anon ;;
             3) show_status ;;
             4) check_leaks ;;
-            5) panic_mode ;;
-            6) exit 0 ;;
+            5) new_identity ;;
+            6) panic_mode ;;
+            7) exit 0 ;;
             *) echo -e "${RED}✖ Invalid option${RESET}" ;;
         esac
         read -rp "Press Enter to continue..." _
@@ -544,12 +584,13 @@ main_menu() {
 }
 
 show_help() {
-    echo "Usage: sudo ./Anonyx.sh [--enable|--disable|--status|--leaktest|--panic|--help]"
+    echo "Usage: sudo ./Anonyx.sh [--enable|--disable|--status|--leaktest|--newid|--panic|--help]"
     echo "  no args      open menu"
     echo "  --enable     enable anonymity + killswitch"
     echo "  --disable    restore normal settings"
     echo "  --status     show tor + dns status"
     echo "  --leaktest   check for ip/dns/ipv6 leaks"
+    echo "  --newid      restart tor for new ip"
     echo "  --panic      cut all net immediately"
 }
 
@@ -564,8 +605,10 @@ case "${1:-}" in
     --disable|-d) disable_anon; exit $? ;;
     --status|-s) show_status; exit 0 ;;
     --leaktest|-l) check_leaks; exit $? ;;
+    --newid|-n) new_identity; exit $? ;;
     --panic) panic_mode; exit 0 ;;
     --help|-h) show_help; exit 0 ;;
+    --version|-v) echo "Anonyx $VERSION"; exit 0 ;;
     "") main_menu ;;
     *) echo -e "${RED}✖ Unknown option: $1${RESET}"; show_help; exit 1 ;;
 esac

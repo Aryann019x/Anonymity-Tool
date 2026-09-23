@@ -6,7 +6,7 @@
 
 Route CLI traffic through Tor, with kill-switch, DNS lock, and leak checks.
 
-[![version](https://img.shields.io/badge/version-2.1-blue)](Anonyx.sh)
+[![version](https://img.shields.io/badge/version-2.2-blue)](Anonyx.sh)
 [![bash](https://img.shields.io/badge/bash-5.x-green)](Anonyx.sh)
 [![license](https://img.shields.io/github/license/Aryann019x/Anonymity-Tool)](LICENSE)
 [![last-commit](https://img.shields.io/github/last-commit/Aryann019x/Anonymity-Tool)](https://github.com/Aryann019x/Anonymity-Tool/commits/main)
@@ -40,11 +40,11 @@ Route CLI traffic through Tor, with kill-switch, DNS lock, and leak checks.
 
 Anonyx is a single Bash script that:
 
-1. Routes traffic through Tor (SOCKS `127.0.0.1:9050`)
-2. Blocks everything else with an iptables kill-switch
-3. Locks DNS so it can't leak or revert mid-session
+1. Transparently routes **all TCP** through Tor — no `proxychains` needed
+2. Resolves **DNS through Tor itself** (`127.0.0.1:5353`), never plaintext
+3. Blocks everything else with an iptables kill-switch
 4. Disables IPv6 while active (a common Tor bypass)
-5. Checks for leaks and lets you get a fresh identity or cut the network instantly
+5. Isolates circuits per destination, verifies leaks, and lets you grab a fresh identity or cut the network instantly
 
 > [!NOTE]
 > Your ISP can still see you are using Tor. Logging into personal accounts will still identify you. Anonyx stops accidental leaks — it does not make you invisible.
@@ -63,11 +63,11 @@ cd Anonymity-Tool
 chmod +x Anonyx.sh
 
 sudo ./Anonyx.sh --enable
-proxychains4 curl -s https://check.torproject.org/api/ip
+curl -s https://check.torproject.org/api/ip
 sudo ./Anonyx.sh --leaktest
 ```
 
-Watch the demo above for the full output. To stop and restore everything:
+No `proxychains` needed — plain `curl` already exits via Tor (see the demo above). To stop and restore everything:
 
 ```bash
 sudo ./Anonyx.sh --disable
@@ -94,7 +94,7 @@ sudo ./Anonyx.sh
 | `--help`, `--version` | Help / version info |
 
 > [!IMPORTANT]
-> While enabled, use `proxychains4 <command>`. Direct connections timing out means the kill-switch is working — not a bug.
+> Traffic flows transparently: plain `curl`, `apt`, `ssh` all exit via Tor — no `proxychains` needed (it still works as an alternative). UDP-based apps (calls, games, QUIC) stay blocked: Tor can't carry UDP, that's a protocol limit, not a bug.
 
 Dependencies (`tor`, `proxychains4`, `torsocks`, `curl`, `ufw`, `iptables`, `iproute2`) install automatically.
 
@@ -103,23 +103,23 @@ Dependencies (`tor`, `proxychains4`, `torsocks`, `curl`, `ufw`, `iptables`, `ipr
 ## How it works
 
 ```text
-Your apps → proxychains (127.0.0.1:9050) → Tor → Internet
-Clearnet traffic → blocked by iptables (DROP)
+Your apps → iptables REDIRECT → Tor (TransPort 9040 / DNSPort 5353) → Internet
+Anything unredirectable (UDP) → dropped by the kill-switch
 IPv6 → disabled for the session
-DNS → locked to anon servers, verified after setup
+DNS → 127.0.0.1, answered by Tor, never leaves in plaintext
 ```
 
 Steps on `--enable`:
 
 1. Saves your clear IP for later comparison
 2. Backs up `torrc`, `proxychains4.conf`, `resolv.conf` (once, never overwrites a good backup)
-3. Writes hardened Tor config, locks DNS with `chattr +i`
-4. Applies kill-switch rules, disables IPv6
+3. Writes hardened Tor config (per-destination circuit isolation), pins DNS to Tor with `chattr +i`
+4. Applies kill-switch + transparent NAT redirects, disables IPv6
 5. Verifies Tor — auto-restores everything on failure
 
 On `--disable`, all files, firewall rules, and IPv6 settings are restored. Nothing else on the system is modified.
 
-Details: SOCKS `9050` · DNSPort `5353` · TransPort `9040` · Control `9051` · DNS `1.1.1.1, 9.9.9.9, 208.67.222.222` · state in `/var/lib/anonyx/` · log at `/var/log/anonymity.log`
+Details: SOCKS `9050` (isolated) · DNSPort `5353` · TransPort `9040` · Control `9051` · `resolv.conf` → `127.0.0.1` · state in `/var/lib/anonyx/` · log at `/var/log/anonymity.log`
 
 ---
 
@@ -138,11 +138,12 @@ Details: SOCKS `9050` · DNSPort `5353` · TransPort `9040` · Control `9051` ·
 
 | Problem | Fix |
 | --- | --- |
-| No internet after enable | Use `proxychains4`. Clearnet is blocked by design. |
-| Tor verification fails | Wait 30s, retry. Check `systemctl status tor` and `/var/log/anonymity.log`. |
+| No internet after enable | Tor may still be bootstrapping — wait 30s, check `systemctl status tor` and `/var/log/anonymity.log`. |
+| UDP apps (calls, games, QUIC) never work | Tor can't carry UDP. By design, not a bug. |
+| Tor stuck bootstrapping | Check the clock (`timedatectl`) — Tor needs correct time. Sync, then enable. |
 | No network after panic | Run `sudo ./Anonyx.sh --disable` or reboot. |
 | Same IP after `--newid` | Exit pool is small. Wait and retry. |
-| DNS keeps reverting | v2.1 locks it. Run `sudo chattr -i /etc/resolv.conf`, then disable/enable. |
+| DNS keeps reverting | v2.2 pins `resolv.conf` to Tor. Run `sudo chattr -i /etc/resolv.conf`, then disable/enable. |
 
 ---
 

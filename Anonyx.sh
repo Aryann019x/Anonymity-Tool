@@ -1,17 +1,18 @@
 #!/bin/bash
 # ───────────────────────────────────────────────────────────────────────────
-# Anonymity Tool Anonyx v2.1
+# Anonymity Tool Anonyx v2.2
 # Kali Linux
 # Created by Aryann019x
 # A robust tool for anonymous operations
 # Note: no tool gives 100% privacy, this just makes leaks much harder
 # ───────────────────────────────────────────────────────────────────────────
 
-VERSION="2.1"
+VERSION="2.2"
 TOR_PORT=9050
 CONTROL_PORT=9051
 DNS_PORT=5353
 TRANS_PORT=9040
+# kept for reference only: all dns now resolves via tor, nothing uses these directly
 DNS_SERVERS=("1.1.1.1" "9.9.9.9" "208.67.222.222")
 
 # Colors
@@ -123,7 +124,7 @@ setup_tor() {
     mkdir -p /etc/tor
     backup_once "$TOR_CONF" "$TOR_BAK"
     cat > "$TOR_CONF" << EOF
-SocksPort 127.0.0.1:$TOR_PORT
+SocksPort 127.0.0.1:$TOR_PORT IsolateDestAddr IsolateDestPort
 DNSPort 127.0.0.1:$DNS_PORT
 TransPort 127.0.0.1:$TRANS_PORT
 ControlPort $CONTROL_PORT
@@ -163,9 +164,9 @@ EOF
     chmod 644 "$PROXYCHAINS_CONF"
 }
 
-# lock dns file so NetworkManager doesnt overwrite it
+# dns goes through tor itself: localhost only, locked so nothing can revert it
 lock_dns() {
-    printf "nameserver %s\n" "${DNS_SERVERS[@]}" > "$RESOLV_FILE"
+    printf "nameserver 127.0.0.1\n" > "$RESOLV_FILE"
     chattr +i "$RESOLV_FILE" 2>/dev/null || true
 }
 
@@ -199,12 +200,12 @@ restore_ipv6() {
     fi
 }
 
-# killswitch: only tor user + loopback can go out, rest is dropped
+# killswitch + transparent proxy: all tcp/dns forced through tor, rest dropped
 enable_killswitch() {
     echo -e "${WHITE}🔹 Enabling kill-switch...${RESET}"
     mkdir -p "$STATE_DIR"
     if ! have_iptables; then
-        echo -e "${YELLOW}⚠ iptables missing, using ufw only (weaker)${RESET}"
+        echo -e "${YELLOW}⚠ iptables missing, using ufw only (weaker, no transparent proxy)${RESET}"
         if command -v ufw >/dev/null 2>&1; then
             ufw --force enable >/dev/null 2>&1 || true
             ufw default deny outgoing >/dev/null 2>&1 || true
@@ -213,7 +214,7 @@ enable_killswitch() {
         return 0
     fi
 
-    # save once
+    # save once (iptables-save covers filter + nat + mangle)
     if [[ ! -f "$IPT_BAK" ]]; then
         iptables-save > "$IPT_BAK" 2>/dev/null || true
     fi
@@ -222,12 +223,28 @@ enable_killswitch() {
     fi
 
     local tor_uid=$(get_tor_uid)
+    if [[ -z "$tor_uid" ]]; then
+        echo -e "${YELLOW}⚠ tor user not found, tor may fail to bootstrap (auto-rollback will trigger)${RESET}"
+    fi
 
+    # start clean so re-enable doesnt stack rules
+    iptables -t nat -F
+    iptables -t nat -X
     iptables -F
     iptables -X
     iptables -P INPUT DROP
     iptables -P FORWARD DROP
     iptables -P OUTPUT DROP
+
+    # transparent proxy: tcp -> tor transport, dns -> tor dnsport
+    # loopback and tor itself are never redirected
+    iptables -t nat -A OUTPUT -o lo -j RETURN
+    if [[ -n "$tor_uid" ]]; then
+        iptables -t nat -A OUTPUT -m owner --uid-owner "$tor_uid" -j RETURN
+    fi
+    iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT
+    iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT
+    iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports $TRANS_PORT
 
     iptables -A INPUT -i lo -j ACCEPT
     iptables -A OUTPUT -o lo -j ACCEPT
@@ -248,12 +265,10 @@ enable_killswitch() {
     iptables -A OUTPUT -p udp --dport 67:68 --sport 67:68 -j ACCEPT
     iptables -A INPUT -p udp --sport 67:68 --dport 67:68 -j ACCEPT
 
-    # dns only to localhost tor + our anon servers, rest blocked
+    # redirected traffic loops back via lo (accepted above),
+    # explicit allow for tor dns keeps the intent clear
     iptables -A OUTPUT -d 127.0.0.1 -p udp --dport $DNS_PORT -j ACCEPT
-    for dns in "${DNS_SERVERS[@]}"; do
-        iptables -A OUTPUT -d "$dns" -p udp --dport 53 -j ACCEPT
-        iptables -A OUTPUT -d "$dns" -p tcp --dport 53 -j ACCEPT
-    done
+    iptables -A OUTPUT -d 127.0.0.1 -p tcp --dport $DNS_PORT -j ACCEPT
 
     disable_ipv6
 }
@@ -268,6 +283,8 @@ disable_killswitch() {
                 iptables -P OUTPUT ACCEPT
                 iptables -F
                 iptables -X
+                iptables -t nat -F
+                iptables -t nat -X
             }
             rm -f "$IPT_BAK"
         else
@@ -276,6 +293,8 @@ disable_killswitch() {
             iptables -P OUTPUT ACCEPT
             iptables -F
             iptables -X
+            iptables -t nat -F
+            iptables -t nat -X
         fi
         rm -f "$IP6T_BAK"
     fi
@@ -343,14 +362,25 @@ check_leaks() {
         echo -e "${YELLOW}⚠ no clear ip saved, skipping compare${RESET}"
     fi
 
-    # dns should be anon servers only
-    local dns=$(grep nameserver "$RESOLV_FILE" 2>/dev/null | awk '{print $2}')
-    echo -e "${WHITE}dns: $(echo $dns | tr '\n' ' ')${RESET}"
-    if echo "$dns" | grep -q "192.168\|10\.\|172\.\|127.0.0.53"; then
+    # dns must go through tor only
+    local dns=$(grep -E '^\s*nameserver' "$RESOLV_FILE" 2>/dev/null | awk '{print $2}' | tr '\n' ' ')
+    echo -e "${WHITE}dns: $dns${RESET}"
+    if [[ "$dns" == "127.0.0.1 " || "$dns" == "127.0.0.1" ]]; then
+        echo -e "${GREEN}✓ dns via Tor (127.0.0.1)${RESET}"
+    elif echo "$dns" | grep -Eq "192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.0\.0\.53"; then
         echo -e "${RED}✖ dns looks like local/isp, possible leak${RESET}"
         fail=1
     else
-        echo -e "${GREEN}✓ dns looks ok${RESET}"
+        echo -e "${RED}✖ dns bypasses tor ($dns)${RESET}"
+        fail=1
+    fi
+
+    # resolution itself must work through tor
+    if getent hosts check.torproject.org >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ dns resolves via Tor${RESET}"
+    else
+        echo -e "${RED}✖ dns resolution broken${RESET}"
+        fail=1
     fi
 
     # ipv6 should be off
@@ -367,11 +397,25 @@ check_leaks() {
         else
             echo -e "${YELLOW}⚠ kill-switch not active${RESET}"
         fi
-        # proof: direct clearnet should fail when killswitch is on
-        if curl --max-time 5 -s https://api.ipify.org >/dev/null 2>&1; then
-            echo -e "${YELLOW}⚠ direct net still works (kill-switch weak/off)${RESET}"
+        # proof: direct (non-proxychained) traffic must exit via tor ip
+        local direct_ip=$(curl --max-time 15 -s https://api.ipify.org 2>/dev/null || echo "")
+        if [[ -z "$direct_ip" ]]; then
+            echo -e "${YELLOW}⚠ direct connection failed (transparent proxy not redirecting?)${RESET}"
+        elif [[ "$direct_ip" == "$tor_ip" ]]; then
+            echo -e "${GREEN}✓ transparent proxy working (direct net exits via Tor)${RESET}"
         else
-            echo -e "${GREEN}✓ direct clearnet blocked (kill-switch working)${RESET}"
+            echo -e "${RED}✖ LEAK: direct net exits via $direct_ip (not Tor)${RESET}"
+            fail=1
+        fi
+
+        # proof: plaintext dns to the outside must be blocked
+        if ! command -v timeout >/dev/null 2>&1; then
+            echo -e "${YELLOW}⚠ timeout cmd missing, skipping direct-dns proof${RESET}"
+        elif timeout 5 bash -c '</dev/tcp/1.1.1.1/53' 2>/dev/null; then
+            echo -e "${RED}✖ LEAK: direct dns reachable (bypasses Tor)${RESET}"
+            fail=1
+        else
+            echo -e "${GREEN}✓ direct dns blocked (must use Tor)${RESET}"
         fi
     fi
 
@@ -399,6 +443,8 @@ panic_mode() {
         iptables -P OUTPUT DROP
         iptables -F
         iptables -X
+        iptables -t nat -F
+        iptables -t nat -X
     fi
     if command -v ip6tables >/dev/null 2>&1; then
         ip6tables -P INPUT DROP 2>/dev/null || true
@@ -474,7 +520,7 @@ enable_anon() {
         echo -e "${GREEN}✓ Anonymity enabled${RESET}"
         show_status
         check_leaks || true
-        echo -e "${YELLOW}tip: use proxychains4 for apps, else kill-switch will block them (thats normal)${RESET}"
+        echo -e "${YELLOW}tip: tcp/dns now goes via tor transparently, just use apps normally (udp stays blocked)${RESET}"
         return 0
     else
         echo -e "${RED}✖ Setup failed${RESET}"
@@ -543,6 +589,11 @@ show_status() {
     else
         printf "${WHITE}%-20s: %s${RESET}\n" "IPv6" "on"
     fi
+    local trans="off"
+    if have_iptables && iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q "REDIRECT.*$TRANS_PORT"; then
+        trans="on"
+    fi
+    printf "${WHITE}%-20s: %s${RESET}\n" "Transparent" "$trans"
     echo -e "${BLUE}${BOLD}═══════════════════════════════════════${RESET}"
 }
 

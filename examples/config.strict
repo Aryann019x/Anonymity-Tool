@@ -1,0 +1,7 @@
+# example config - copy to /etc/tor-killswitch/config
+MODE=strict
+ALLOW_DHCP=1
+ALLOW_LAN=0
+FW_BACKEND_PREF=auto
+NETNS_ENABLE=0
+EXIT_NODES=

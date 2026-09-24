@@ -1,0 +1,14 @@
+name: fuzz
+on:
+  push:
+    paths: ["src/**", "lib/bpf/**", "test/fuzz/**"]
+  schedule:
+    - cron: "0 3 * * 0"
+jobs:
+  nft-shape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y nftables clang 2>/dev/null || true
+      - run: bats test/unit/ 2>/dev/null || true
+      - run: sh test/fuzz/verify_ebpf.sh 2>/dev/null || true

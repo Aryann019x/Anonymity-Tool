@@ -1,0 +1,27 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# initramfs-tools hook: embed fail-closed nft ruleset into initrd (<500KB).
+# Package: anonyx-initramfs (optional, paranoid only).
+set -eu
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+# keep it tiny: nft binary + one static ruleset, no tor in initrd.
+copy_exec /usr/sbin/nft /sbin/nft
+mkdir -p "$DESTDIR/etc/anonyx-initramfs"
+cp -a /etc/anonyx-initramfs/early.nft "$DESTDIR/etc/anonyx-initramfs/early.nft" 2>/dev/null || {
+  # fallback minimal ruleset generated at build time (loopback only + drop)
+  printf '%s\n' 'table inet anonyx_early {' \
+    '  chain output { type filter hook output priority 0; policy drop;' \
+    '    oifname "lo" accept' \
+    '    ct state established,related accept }' \
+    '  chain input { type filter hook input priority 0; policy drop;' \
+    '    iifname "lo" accept' \
+    '    ct state established,related accept }' \
+    '  chain forward { type filter hook forward priority 0; policy drop; }' \
+    '}' > "$DESTDIR/etc/anonyx-initramfs/early.nft"
+}
+echo "[anonyx hook] early nft ruleset embedded"

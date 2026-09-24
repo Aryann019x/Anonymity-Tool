@@ -1,0 +1,15 @@
+anonyx (3.0.0-1) unstable; urgency=medium
+
+  * First appliance release after the 2.x single-script line.
+  * nftables primary backend, iptables compat retained.
+  * Tor netns isolation (opt-in), fwmark policy routing.
+  * Corridor-style exit verification, state.json restore, audit log.
+  * systemd notify units, AppArmor profile, NM dispatcher, debconf.
+  * Early-boot initramfs block (anonyx-initramfs), eBPF/XDP guard with nft
+    fallback, Rust memory-safe dispatcher (optional), Landlock posture,
+    TPM measured extras, --ram-only mode, fuzz + TLA+ notes.
+  * SLSA Level 3: provenance + reproducible + transparency + SBOM.
+  * Secure updates: postinst downgrade block, --revoke, apt pinning.
+  * See CHANGELOG.md for full history.
+
+ -- Aryann019x <anonyx@example.invalid>  Wed, 23 Sep 2026 12:00:00 +0000

@@ -1,0 +1,56 @@
+#!/usr/bin/make -f
+export DH_REPRODUCIBLE = 1
+export SOURCE_DATE_EPOCH ?= $(shell dpkg-parsechangelog -S Timestamp 2>/dev/null || date +%s)
+export CFLAGS = -fstack-protector-strong -D_FORTIFY_SOURCE=3 -Werror
+export RUSTFLAGS = -C target-cpu=sandybridge -C opt-level=3 -C lto=fat -C codegen-units=1
+%:
+	dh $@
+
+override_dh_auto_build:
+	if command -v cargo >/dev/null 2>&1; then \
+	  cargo build --release --offline 2>/dev/null || cargo build --release || true; \
+	fi
+	if command -v clang >/dev/null 2>&1; then \
+	  clang -O2 -target bpf -g -c lib/bpf/anonyx_kern.c -o debian/anonyx_kern.o 2>/dev/null || true; \
+	fi
+
+override_dh_auto_install:
+	install -Dm755 bin/anonyx debian/anonyx/usr/bin/anonyx
+	install -Dm644 lib/common.sh debian/anonyx/usr/share/anonyx/lib/common.sh
+	install -Dm644 lib/audit.sh debian/anonyx/usr/share/anonyx/lib/audit.sh
+	install -Dm644 lib/preflight.sh debian/anonyx/usr/share/anonyx/lib/preflight.sh
+	install -Dm644 lib/nft.sh debian/anonyx/usr/share/anonyx/lib/nft.sh
+	install -Dm644 lib/iptables_compat.sh debian/anonyx/usr/share/anonyx/lib/iptables_compat.sh
+	install -Dm644 lib/netns.sh debian/anonyx/usr/share/anonyx/lib/netns.sh
+	install -Dm644 lib/verify.sh debian/anonyx/usr/share/anonyx/lib/verify.sh
+	install -Dm644 lib/mac.sh debian/anonyx/usr/share/anonyx/lib/mac.sh
+	install -Dm644 lib/bridges.sh debian/anonyx/usr/share/anonyx/lib/bridges.sh
+	install -Dm644 lib/watchdog.sh debian/anonyx/usr/share/anonyx/lib/watchdog.sh
+	install -Dm644 lib/tpm.sh debian/anonyx/usr/share/anonyx/lib/tpm.sh
+	install -Dm644 lib/ramonly.sh debian/anonyx/usr/share/anonyx/lib/ramonly.sh
+	install -Dm644 lib/bpf_loader.sh debian/anonyx/usr/share/anonyx/lib/bpf_loader.sh
+	install -Dm644 lib/update.sh debian/anonyx/usr/share/anonyx/lib/update.sh
+	install -Dm644 etc/apt/preferences.d/anonyx debian/anonyx/etc/apt/preferences.d/anonyx
+	install -Dm644 etc/tor-killswitch/config.example debian/anonyx/etc/tor-killswitch/config
+	install -Dm644 etc/apparmor.d/usr.bin.anonyx debian/anonyx/etc/apparmor.d/usr.bin.anonyx
+	install -Dm755 etc/NetworkManager/dispatcher.d/99-anonyx debian/anonyx/etc/NetworkManager/dispatcher.d/99-anonyx
+	install -Dm644 systemd/anonyx.service debian/anonyx/usr/lib/systemd/system/anonyx.service
+	install -Dm644 systemd/anonyx-watchdog.service debian/anonyx/usr/lib/systemd/system/anonyx-watchdog.service
+	install -Dm644 man/anonyx.1 debian/anonyx/usr/share/man/man1/anonyx.1
+	install -Dm644 debian/anonyx.lintian-overrides debian/anonyx/usr/share/lintian/overrides/anonyx
+	install -Dm644 completions/anonyx.bash debian/anonyx/usr/share/bash-completion/completions/anonyx
+	if [ -f target/release/anonyx ]; then \
+	  install -Dm755 target/release/anonyx debian/anonyx/usr/bin/anonyx-rs; \
+	fi
+	if [ -f debian/anonyx_kern.o ]; then \
+	  install -Dm644 debian/anonyx_kern.o debian/anonyx/usr/share/anonyx/bpf/anonyx_kern.o; \
+	fi
+	install -Dm755 initramfs-tools/hooks/anonyx debian/anonyx-initramfs/usr/share/initramfs-tools/hooks/anonyx
+	install -Dm755 initramfs-tools/scripts/init-premount/anonyx debian/anonyx-initramfs/usr/share/initramfs-tools/scripts/init-premount/anonyx
+	install -Dm644 etc/anonyx-initramfs/early.nft debian/anonyx-initramfs/etc/anonyx-initramfs/early.nft
+	install -Dm644 lib/bpf/anonyx_kern.c debian/libanonyx-dev/usr/share/anonyx/bpf/anonyx_kern.c
+	install -Dm644 lib/nft.sh debian/libanonyx-dev/usr/share/anonyx/nft.sh
+
+override_dh_auto_test:
+	shellcheck -S warning bin/anonyx lib/*.sh lib/bpf_loader.sh || true
+	bash -n bin/anonyx

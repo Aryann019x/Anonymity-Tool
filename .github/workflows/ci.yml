@@ -1,0 +1,25 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+      - run: shellcheck -S warning bin/anonyx lib/*.sh
+      - run: bash -n bin/anonyx
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y bats nftables
+      - run: bats test/unit/
+  debian:
+    strategy:
+      matrix: { dist: [stable, testing, unstable] }
+    runs-on: ubuntu-latest
+    container: debian:${{ matrix.dist }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y tor curl nftables iptables iproute2 bats procps
+      - run: bats test/unit/

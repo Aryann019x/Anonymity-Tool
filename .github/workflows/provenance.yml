@@ -1,0 +1,39 @@
+name: provenance
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  actions: read
+  id-token: write
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build artifacts
+        run: |
+          dpkg-buildpackage -us -uc
+          mkdir -p dist
+          cp ../*.deb dist/ 2>/dev/null || true
+          cp VERSION dist/ 2>/dev/null || true
+      - id: hash
+        run: |
+          (cd dist && sha256sum * > hashes.txt)
+          echo "hashes=$(cat dist/hashes.txt | base64 -w0)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      upload-assets: true

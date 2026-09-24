@@ -1,0 +1,14 @@
+Template: anonyx/mode
+Type: select
+Choices: strict, paranoid, transparent
+Default: strict
+Description: Default killswitch mode?
+ strict drops everything except Tor. paranoid also drops DHCP and
+ randomizes MACs. transparent redirects TCP/DNS through Tor.
+
+Template: anonyx/netns
+Type: boolean
+Default: false
+Description: Isolate Tor in a network namespace?
+ Stronger isolation, needs iproute2 + nftables. Leave off unless you
+ know policy routing.

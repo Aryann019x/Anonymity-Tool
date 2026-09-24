@@ -1,1 +1,10 @@
 *.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+bin/anonyx text eol=lf
+debian/rules text eol=lf
+script/* text eol=lf
+lib/* text eol=lf
+install.sh text eol=lf
+uninstall.sh text eol=lf
+VERSION export-subst

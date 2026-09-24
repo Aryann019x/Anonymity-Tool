@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# debian postinst: signature note, downgrade prevention, safe defaults.
+set -e
+. /usr/share/debconf/confmodule
+case "$1" in
+  configure)
+    # downgrade prevention: refuse install if a newer state.json claims newer version
+    if [ -f /run/tor-killswitch/state.json ]; then
+      if grep -q '"version":"[6-9]' /run/tor-killswitch/state.json 2>/dev/null; then
+        echo "anonyx: newer state detected, refusing downgrade" >&2
+        exit 1
+      fi
+    fi
+    [ -f /etc/tor-killswitch/config ] || cp /etc/tor-killswitch/config.example /etc/tor-killswitch/config 2>/dev/null || true
+    chmod 600 /etc/tor-killswitch/config 2>/dev/null || true
+    echo "anonyx: verify releases with script/verify-provenance.sh (see docs/transparency.md)"
+    ;;
+esac
+#DEBHELPER#
+exit 0

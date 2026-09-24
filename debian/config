@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+. /usr/share/debconf/confmodule
+db_get anonyx/mode || true
+MODE="$RET"
+db_get anonyx/netns || true
+NETNS="$RET"
+mkdir -p /etc/tor-killswitch
+[ -f /etc/tor-killswitch/config ] || cp /etc/tor-killswitch/config.example /etc/tor-killswitch/config 2>/dev/null || true
+sed -i "s/^MODE=.*/MODE=$MODE/" /etc/tor-killswitch/config 2>/dev/null || true
+if [ "$NETNS" = "true" ]; then
+  sed -i "s/^NETNS_ENABLE=.*/NETNS_ENABLE=1/" /etc/tor-killswitch/config 2>/dev/null || true
+fi
+#DEBHELPER#

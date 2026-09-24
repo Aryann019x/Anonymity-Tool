@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Unit]
+Description=anonyx fail-closed watchdog
+After=anonyx.service
+BindsTo=anonyx.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/anonyx --watchdog
+Restart=always
+RestartSec=10
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

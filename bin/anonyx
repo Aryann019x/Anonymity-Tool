@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# anonyx 4.0 - tor killswitch appliance for debian 12+.
+# nft primary, iptables compat, optional netns, state.json restore, audit log.
+# shellcheck disable=SC1091
+set -u
+set -o pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB_DIR="${LIB_DIR:-$SELF_DIR/lib}"
+# shellcheck source=lib/common.sh
+source "$LIB_DIR/common.sh"
+for f in audit preflight nft iptables_compat netns verify mac bridges watchdog tpm ramonly bpf_loader update; do
+  # shellcheck disable=SC1090
+  source "$LIB_DIR/$f.sh"
+done
+
+if [[ -f "$SELF_DIR/VERSION" ]]; then
+  VERSION="$(tr -d ' \t\n' < "$SELF_DIR/VERSION" 2>/dev/null || echo "$ANONYX_VERSION")"
+else
+  VERSION="$ANONYX_VERSION"
+fi
+CMD=""; APP=""; OPSEC_FIX=""; EXEC_ARGS=()
+
+# --- tor + dns helpers (kept small, auditable) ---
+
+backup_once() { [[ -f "$1" && ! -f "$2" ]] || return 0; mkdir -p "$(dirname "$2")"; cp -a "$1" "$2" 2>/dev/null || cp "$1" "$2" 2>/dev/null || true; chmod 600 "$2" 2>/dev/null || true; }
+atomic_write() { local d="$1" t; t="$(mktemp "$(dirname "$d")/.tmp.XXXXXX")" || return 1; cat > "$t"; chmod 644 "$t"; mv -f "$t" "$d"; }
+is_systemd() { have systemctl && [[ -d /run/systemd/system ]]; }
+get_iface() { local i=""; have ip && i="$(ip route show default 2>/dev/null | awk '{print $5}' | head -n1)"; echo "${i:-lo}"; }
+
+MARK_BEGIN="# >>> anonyx managed >>>"; MARK_END="# <<< anonyx managed <<<"
+
+resolve_proxy_conf() {
+  if [[ -n "${PROXYCHAINS_CONF:-}" ]]; then echo "$PROXYCHAINS_CONF"; return 0; fi
+  for c in /etc/proxychains4.conf /etc/proxychains.conf; do [[ -f "$c" ]] && { echo "$c"; return 0; }; done
+  echo "/etc/proxychains4.conf"
+}
+
+torrc_write() {
+  mkdir -p /etc/tor; backup_once "$TOR_CONF" "$TOR_BAK"
+  if [[ -f "$TOR_CONF" ]]; then
+    awk -v b="$MARK_BEGIN" -v e="$MARK_END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip{print}' "$TOR_CONF" > "$TOR_CONF.anonyx.tmp" 2>/dev/null || cp "$TOR_CONF" "$TOR_CONF.anonyx.tmp"
+  else : > "$TOR_CONF.anonyx.tmp"; fi
+  {
+    cat "$TOR_CONF.anonyx.tmp" 2>/dev/null
+    echo "$MARK_BEGIN"
+    echo "SocksPort 127.0.0.1:$TOR_PORT IsolateDestAddr IsolateDestPort"
+    echo "DNSPort 127.0.0.1:$DNS_PORT"
+    echo "ControlPort $CONTROL_PORT"
+    echo "DataDirectory /var/lib/tor"
+    echo "CookieAuthentication 1"
+    echo "AvoidDiskWrites 1"
+    echo "ClientOnly 1"; echo "SafeSocks 1"; echo "TestSocks 1"
+    echo "WarnPlaintextPorts 23,109,110,143"
+    echo "VirtualAddrNetworkIPv4 10.192.0.0/10"
+    echo "AutomapHostsOnResolve 1"
+    echo "SocksPolicy accept 127.0.0.1"; echo "SocksPolicy reject *"
+    [[ -n "$EXIT_NODES" ]] && { echo "ExitNodes $EXIT_NODES"; echo "StrictNodes 1"; }
+    if [[ -n "$BRIDGE_LINES" ]]; then
+      echo "UseBridges 1"; echo "$BRIDGE_LINES" | tr '|' '\n'
+      have obfs4proxy && echo "ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy"
+      have snowflake-client && echo "ClientTransportPlugin snowflake exec /usr/bin/snowflake-client"
+    fi
+    [[ "$MODE" == "transparent" ]] && echo "TransPort 127.0.0.1:$TRANS_PORT IsolateClientAddr IsolateSOCKSAuth IsolateDestPort"
+    echo "$MARK_END"
+  } | atomic_write "$TOR_CONF"
+  rm -f "$TOR_CONF.anonyx.tmp"; chmod 644 "$TOR_CONF"
+}
+
+tor_restart() { [[ "$DRY_RUN" == "1" ]] && { echo "would restart tor"; return 0; }; if is_systemd; then systemctl restart tor 2>/dev/null || systemctl restart tor@default 2>/dev/null || service tor restart 2>/dev/null || true; else service tor restart 2>/dev/null || /etc/init.d/tor restart 2>/dev/null || true; fi; }
+tor_active() { is_systemd && { systemctl is-active --quiet tor 2>/dev/null || systemctl is-active --quiet tor@default 2>/dev/null; } || pgrep -x tor >/dev/null 2>&1; }
+
+dns_lock() {
+  mkdir -p "$VAR_LIB_DIR" 2>/dev/null || true
+  [[ -L /etc/resolv.conf && ! -f "$VAR_LIB_DIR/resolv.link" ]] && readlink /etc/resolv.conf > "$VAR_LIB_DIR/resolv.link" 2>/dev/null || true
+  [[ -f /etc/resolv.conf && ! -f /etc/resolv.conf.bak.anonyx ]] && cp -a /etc/resolv.conf /etc/resolv.conf.bak.anonyx 2>/dev/null || true
+  [[ "$DRY_RUN" == "1" ]] && { echo "would lock resolv -> 127.0.0.1"; return 0; }
+  have chattr && chattr -i /etc/resolv.conf 2>/dev/null || true
+  [[ -L /etc/resolv.conf ]] && rm -f /etc/resolv.conf
+  printf "nameserver 127.0.0.1\noptions edns0 trust-ad\n" | atomic_write /etc/resolv.conf
+  have chattr && chattr +i /etc/resolv.conf 2>/dev/null || true
+  is_systemd && systemctl is-active --quiet systemd-resolved 2>/dev/null && systemctl stop systemd-resolved 2>/dev/null || true
+}
+
+dns_restore() {
+  have chattr && chattr -i /etc/resolv.conf 2>/dev/null || true
+  if [[ -f /etc/resolv.conf.bak.anonyx ]]; then
+    if [[ -f "$VAR_LIB_DIR/resolv.link" ]]; then
+      local t; t="$(cat "$VAR_LIB_DIR/resolv.link" 2>/dev/null)"; rm -f /etc/resolv.conf
+      [[ -n "$t" ]] && ln -sf "$t" /etc/resolv.conf 2>/dev/null || mv -f /etc/resolv.conf.bak.anonyx /etc/resolv.conf 2>/dev/null || true
+      rm -f "$VAR_LIB_DIR/resolv.link"
+    else mv -f /etc/resolv.conf.bak.anonyx /etc/resolv.conf 2>/dev/null || true; fi
+  fi
+  have resolvconf && resolvconf -u 2>/dev/null || true
+}
+
+backend_choose() {
+  if [[ "$FW_BACKEND_PREF" == "nft" ]]; then echo nft; return 0; fi
+  if [[ "$FW_BACKEND_PREF" == "iptables" ]]; then echo iptables; return 0; fi
+  have nft && nft list ruleset >/dev/null 2>&1 && { echo nft; return 0; }
+  echo iptables
+}
+
+fw_apply() {
+  local b; b="$(backend_choose)"
+  if [[ "$b" == "nft" ]]; then nft_apply; else ipt_apply; fi
+  echo "$b"
+}
+
+fw_remove() {
+  nft_flush 2>/dev/null || true
+  ipt_restore 2>/dev/null || true
+  netns_down 2>/dev/null || true
+}
+
+do_enable() {
+  need_root; load_config; ensure_dirs; audit_init
+  if update_revoked 2>/dev/null; then die "anonyx revoked ($(cat "$VAR_RUN_DIR/revoked" 2>/dev/null)). remove $VAR_RUN_DIR/revoked to re-enable."; fi
+  audit_event "enable-start" "mode=$MODE netns=$NETNS_ENABLE ram_only=${RAM_ONLY:-0}"
+  preflight
+  validate_torrc "$TOR_CONF"
+  trap 'warn "interrupted, restoring..."; do_restore; exit 130' INT TERM
+  ramonly_on
+  tpm_extend_state "enable"
+  dns_lock; torrc_write
+  local pc; pc="$(resolve_proxy_conf)"
+  [[ -f "$pc" && ! -f "$pc.bak.anonyx" ]] && cp -a "$pc" "$pc.bak.anonyx"
+  { echo "# anonyx $(date -Is)"; echo "strict_chain"; echo "proxy_dns"; echo "quiet_mode"; echo "[ProxyList]"; echo "socks5 127.0.0.1 $TOR_PORT"; } | atomic_write "$pc"
+  mac_randomize_all
+  netns_up
+  tor_restart
+  local backend; backend="$(fw_apply)"
+  # in-kernel guard when available, nft stays authoritative on failure.
+  bpf_attach "$(get_iface)" 2>/dev/null || true
+  # state.json for --restore (not just flush)
+  local snap; snap="$(nft_snapshot 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}' || echo unknown)"
+  printf '{"version":"%s","mode":"%s","backend":"%s","netns":%s,"nft_snapshot":"%s","time":"%s"}\n' \
+    "$VERSION" "$MODE" "$backend" "$([[ "$NETNS_ENABLE" == "1" ]] && echo true || echo false)" "$snap" "$(date -u +%FT%TZ)" | state_write
+  audit_rules_snapshot
+  trap - INT TERM
+  local exit_ip
+  if exit_ip="$(verify_tor_exit 60)"; then
+    ok "tor exit: $exit_ip ($backend)"
+    verify_no_direct && ok "direct blocked" || warn "direct reachable (check)"
+    have systemd-notify && systemd-notify --ready 2>/dev/null || true
+    return 0
+  fi
+  warn "tor verify failed, trying bridges..."
+  if bridges_auto; then
+    torrc_write; tor_restart
+    if exit_ip="$(verify_tor_exit 60)"; then ok "tor exit via bridge: $exit_ip"; return 0; fi
+  fi
+  warn "bootstrap failed, restoring"; do_restore; return 1
+}
+
+do_restore() {
+  need_root; load_config; audit_init
+  audit_event "restore-start" ""
+  dns_restore
+  if grep -q "anonyx managed" "$TOR_CONF" 2>/dev/null; then
+    awk -v b="$MARK_BEGIN" -v e="$MARK_END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip{print}' "$TOR_CONF" | atomic_write "$TOR_CONF"
+  fi
+  local pc; pc="$(resolve_proxy_conf)"; [[ -f "$pc.bak.anonyx" ]] && mv -f "$pc.bak.anonyx" "$pc"
+  fw_remove
+  bpf_detach "$(get_iface)" 2>/dev/null || true
+  mac_restore_all
+  ramonly_off
+  tpm_extend_state "restore"
+  state_clear
+  tor_restart 2>/dev/null || true
+  audit_event "restore-done" ""
+  ok "restored (no reboot needed)"
+}
+
+do_audit() {
+  ensure_dirs; audit_init
+  echo "audit log: $AUDIT_LOG"
+  ls -l "$AUDIT_LOG" 2>/dev/null || true
+  lsattr "$AUDIT_LOG" 2>/dev/null || true
+  tail -n 50 "$AUDIT_LOG" 2>/dev/null || true
+}
+
+show_help() {
+  cat <<EOF
+anonyx $VERSION - tor killswitch appliance (debian 12+). run as root.
+  --enable [--mode strict|paranoid|transparent] [--ram-only]  lock dns, nft/iptables up, verify exit
+  --disable | --restore   clean restore from state.json (no reboot)
+  --status [--json]  --leaktest  --newid  --panic
+  --doctor  --opsec [--fix]  --bridges  --audit
+  --exec -- CMD  |  apt|git|ssh|curl|wget|nmap ...
+  --revoke (emergency disable, blocks re-enable until cleared)
+  --watchdog (systemd calls this)  --help --version
+config: $CONF_FILE  state: $STATE_JSON  log: $AUDIT_LOG
+EOF
+}
+
+# minimal status/leak/newid/opsec/bridges reuse stable logic
+do_status() {
+  load_config
+  local enabled=0 backend state ture
+  [[ -f "$STATE_JSON" ]] && enabled=1
+  state="disabled"; [[ $enabled -eq 1 ]] && state="enabled"
+  backend="$(state_get .backend 2>/dev/null || echo "$(backend_choose)")"
+  [[ -z "$backend" ]] && backend="unknown"
+  local netns="inactive"
+  have ip && ip netns list 2>/dev/null | grep -qw "$NETNS_NAME" && netns="active"
+  local boot="0"
+  boot="$(tor_bootstrap_phase 2>/dev/null || echo 0)"
+  [[ -z "$boot" ]] && boot="0"
+  local audit="none"
+  [[ -f "$AUDIT_LOG" ]] && audit="$(date -u -r "$AUDIT_LOG" +%FT%TZ 2>/dev/null || stat -c %y "$AUDIT_LOG" 2>/dev/null || echo unknown)"
+  local mac="false"
+  [[ -f "$VAR_RUN_DIR/mac.save" ]] && mac="true"
+  local bridges="direct"
+  [[ -n "${BRIDGE_LINES:-}" ]] && bridges="$(echo "$BRIDGE_LINES" | grep -q snowflake && echo snowflake || echo obfs4)"
+  local tor="inactive"
+  tor_active && tor="active"
+  if [[ "$JSON_OUT" == "1" || "${1:-}" == "--json" ]]; then
+    printf '{"state":"%s","backend":"%s","netns":"%s","tor_bootstrap":%s,"tor":"%s","last_audit":"%s","mac_randomized":%s,"bridges":"%s","version":"%s"}\n' \
+      "$state" "$backend" "$netns" "$boot" "$tor" "$audit" "$mac" "$bridges" "$VERSION"
+  else
+    echo "-- anonyx $VERSION --"
+    echo "state: $state  backend: $backend  netns: $netns"
+    echo "tor: $tor  bootstrap: ${boot}%  bridges: $bridges"
+    echo "last_audit: $audit  mac_randomized: $mac"
+  fi
+  if [[ $enabled -eq 1 && "$tor" == "active" ]]; then return 0; fi
+  if [[ $enabled -eq 1 ]]; then return 2; fi
+  return 1
+}
+do_leaktest() { load_config; local fail=0 body ip istor; body="$(tor_exit_ip)"; ip="$(echo "$body" | grep -o '"IP":"[^"]*' | cut -d'"' -f4 || true)"; istor="$(echo "$body" | grep -o '"IsTor":[a-z]*' | cut -d: -f2 || true)"; [[ "$istor" == "true" ]] && echo "[+] tor exit $ip" || { echo "[-] no tor exit"; fail=1; }; verify_no_direct && echo "[+] direct blocked" || { echo "[-] direct open"; fail=1; }; return $fail; }
+do_newid() { need_root; local hex; hex="$(tor_cookie_hex || true)"; if [[ -n "$hex" ]]; then (exec 3<>/dev/tcp/127.0.0.1/"$CONTROL_PORT" 2>/dev/null && { echo "AUTHENTICATE $hex" >&3; sleep 1; echo "SIGNAL NEWNYM" >&3; sleep 1; echo "QUIT" >&3; } && sleep 5 && ok "NEWNYM sent") || { tor_restart; sleep 8; }; else tor_restart; sleep 8; fi; do_leaktest; }
+do_opsec() { load_config; echo "-- opsec --"; echo "iface: $(get_iface)"; date -u; grep -h nameserver /etc/resolv.conf 2>/dev/null || true; [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) == 1 ]] && echo "[+] ipv6 off" || echo "[!] ipv6 on"; tor_active && echo "[+] tor on" || echo "[-] tor off"; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --enable|-e) CMD="enable"; shift ;;
+    --disable|-d|--restore) CMD="restore"; shift ;;
+    --status|-s) CMD="status"; shift ;;
+    --leaktest|-l) CMD="leaktest"; shift ;;
+    --newid|-n) CMD="newid"; shift ;;
+    --panic) CMD="panic"; shift ;;
+    --doctor|--check) CMD="doctor"; shift ;;
+    --opsec) CMD="opsec"; shift ;;
+    --bridges) CMD="bridges"; shift ;;
+    --audit) CMD="audit"; shift ;;
+    --revoke) CMD="revoke"; shift ;;
+    --watchdog) CMD="watchdog"; shift ;;
+    --exec) CMD="exec"; shift; [[ "${1:-}" == "--" ]] && shift; while [[ $# -gt 0 ]]; do EXEC_ARGS+=("$1"); shift; done ;;
+    apt|git|ssh|curl|wget|nmap) CMD="app"; APP="$1"; shift; while [[ $# -gt 0 ]]; do EXEC_ARGS+=("$1"); shift; done ;;
+    --mode) MODE="$2"; shift 2 ;;
+    --ram-only) RAM_ONLY="1"; shift ;;
+    --dry-run) DRY_RUN="1"; shift ;;
+    --no-install) NO_INSTALL="1"; shift ;;
+    --json) JSON_OUT="1"; shift ;;
+    --quiet|-q) QUIET="1"; shift ;;
+    --help|-h) CMD="help"; shift ;;
+    --version|-v) echo "anonyx $VERSION"; exit 0 ;;
+    --) shift; while [[ $# -gt 0 ]]; do EXEC_ARGS+=("$1"); shift; done ;;
+    *) echo "unknown: $1" >&2; show_help; exit 1 ;;
+  esac
+done
+
+case "${CMD:-}" in
+  enable) do_enable; exit $? ;;
+  restore) do_restore; exit $? ;;
+  status) do_status; exit $? ;;
+  leaktest) do_leaktest; exit $? ;;
+  newid) do_newid; exit $? ;;
+  panic) panic_now; exit $? ;;
+  doctor) doctor_full; exit $? ;;
+  opsec) do_opsec; exit $? ;;
+  bridges) echo "paste Bridge lines, empty line ends:"; L=""; while IFS= read -r ln; do [[ -z "$ln" ]] && break; L="$L|$ln"; done; BRIDGE_LINES="${L#|}"; echo "BRIDGE_LINES=\"$BRIDGE_LINES\"" >> "$CONF_FILE"; echo saved ;;
+  audit) do_audit; exit $? ;;
+  revoke) update_revoke; exit $? ;;
+  watchdog) watchdog_loop; exit $? ;;
+  exec) tor_active || die "tor off"; exec proxychains "${EXEC_ARGS[@]}" ;;
+  app) tor_active || die "tor off"; exec proxychains "$APP" "${EXEC_ARGS[@]}" ;;
+  help) show_help ;;
+  "") show_help ;;
+esac

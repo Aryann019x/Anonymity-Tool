@@ -10,12 +10,13 @@ jobs:
         run: apt-get update -qq && apt-get install -y dpkg-dev debhelper shellcheck diffoscope cargo rustc clang libbpf-dev
       - name: Build A
         run: |
-          export SOURCE_DATE_EPOCH=$(date +%s)
+          export SOURCE_DATE_EPOCH=$(dpkg-parsechangelog -S Timestamp)
           dpkg-buildpackage -us -uc
           mkdir -p /tmp/a && cp ../*.deb /tmp/a/ 2>/dev/null || true
       - name: Rebuild B (clean)
         run: |
           debian/rules clean 2>/dev/null || true
+          export SOURCE_DATE_EPOCH=$(dpkg-parsechangelog -S Timestamp)
           dpkg-buildpackage -us -uc
           mkdir -p /tmp/b && cp ../*.deb /tmp/b/ 2>/dev/null || true
       - name: Compare

@@ -1,6 +1,6 @@
 #!/usr/bin/make -f
 export DH_REPRODUCIBLE = 1
-export SOURCE_DATE_EPOCH ?= $(shell date +%s)
+export SOURCE_DATE_EPOCH ?= $(shell dpkg-parsechangelog -S Timestamp 2>/dev/null || date +%s)
 export CFLAGS = -fstack-protector-strong -D_FORTIFY_SOURCE=3 -Werror
 export RUSTFLAGS = -C target-cpu=sandybridge -C opt-level=3 -C lto=fat -C codegen-units=1
 %:

@@ -1,0 +1,27 @@
+.TH ANONYX 1 "2026-09-23" "anonyx 3.0.0" "System Administration"
+.SH NAME
+anonyx \- fail-closed Tor killswitch for Debian
+.SH SYNOPSIS
+.B anonyx
+\fB--enable\fR [\fB--mode strict|paranoid|transparent\fR]
+.br
+.B anonyx
+\fB--restore\fR | \fB--disable\fR | \fB--status\fR | \fB--leaktest\fR | \fB--audit\fR
+.SH DESCRIPTION
+nftables-first (iptables fallback) killswitch. DNS to Tor only, IPv6 off,
+optional Tor network-namespace isolation with fwmark policy routing.
+Verifies exit via Tor API, logs to append-only audit log, restores from
+/run/tor-killswitch/state.json without reboot.
+.SH FILES
+.I /etc/tor-killswitch/config
+.br
+.I /run/tor-killswitch/state.json
+.br
+.I /var/log/tor-killswitch/audit.log
+.SH SEE ALSO
+.BR tor (1),
+.BR nft (8),
+.BR iptables (8)
+.SH WARNINGS
+ISP still sees Tor usage. No malware or fingerprinting protection.
+Do not run Tor Browser on top (Tor-over-Tor).

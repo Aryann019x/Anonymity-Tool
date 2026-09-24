@@ -34,9 +34,10 @@ override_dh_auto_install:
 	install -Dm644 etc/tor-killswitch/config.example debian/anonyx/etc/tor-killswitch/config
 	install -Dm644 etc/apparmor.d/usr.bin.anonyx debian/anonyx/etc/apparmor.d/usr.bin.anonyx
 	install -Dm755 etc/NetworkManager/dispatcher.d/99-anonyx debian/anonyx/etc/NetworkManager/dispatcher.d/99-anonyx
-	install -Dm644 systemd/anonyx.service debian/anonyx/lib/systemd/system/anonyx.service
-	install -Dm644 systemd/anonyx-watchdog.service debian/anonyx/lib/systemd/system/anonyx-watchdog.service
+	install -Dm644 systemd/anonyx.service debian/anonyx/usr/lib/systemd/system/anonyx.service
+	install -Dm644 systemd/anonyx-watchdog.service debian/anonyx/usr/lib/systemd/system/anonyx-watchdog.service
 	install -Dm644 man/anonyx.1 debian/anonyx/usr/share/man/man1/anonyx.1
+	install -Dm644 debian/anonyx.lintian-overrides debian/anonyx/usr/share/lintian/overrides/anonyx
 	install -Dm644 completions/anonyx.bash debian/anonyx/usr/share/bash-completion/completions/anonyx
 	if [ -f target/release/anonyx ]; then \
 	  install -Dm755 target/release/anonyx debian/anonyx/usr/bin/anonyx-rs; \

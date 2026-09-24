@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# /etc/tor-killswitch/config - anonyx 3.0.0
+# KEY=VALUE, unknown keys ignored with warning.
+
+MODE=strict
+ALLOW_DHCP=1
+ALLOW_LAN=0
+FW_FORCE=0
+FW_BACKEND_PREF=auto
+NETNS_ENABLE=0
+NETNS_NAME=anonyx-tor
+FW_MARK=0x1
+EXIT_NODES=
+BRIDGE_LINES=
+TOR_PORT=9050
+CONTROL_PORT=9051
+DNS_PORT=5353
+TRANS_PORT=9040

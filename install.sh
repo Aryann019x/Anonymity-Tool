@@ -11,7 +11,7 @@ need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "run as root: sudo ./ins
 # 1. distro gate
 if [[ ! -f /etc/debian_version ]] && ! grep -qi "debian\|kali\|ubuntu\|parrot\|mint\|pop" /etc/os-release 2>/dev/null; then
   echo "[-] not Debian-based ($(grep -E '^ID=' /etc/os-release 2>/dev/null || echo unknown)). refusing."
-  echo "    anonyx 4.0 targets Debian 12+ only."
+  echo "    anonyx 3.x targets Debian 12+ only."
   exit 1
 fi
 

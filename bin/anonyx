@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# anonyx 4.0 - tor killswitch appliance for debian 12+.
+# anonyx 3.0.0 - tor killswitch appliance for debian 12+.
 # nft primary, iptables compat, optional netns, state.json restore, audit log.
 # shellcheck disable=SC1091
 set -u
@@ -20,7 +20,7 @@ if [[ -f "$SELF_DIR/VERSION" ]]; then
 else
   VERSION="$ANONYX_VERSION"
 fi
-CMD=""; APP=""; OPSEC_FIX=""; EXEC_ARGS=()
+CMD=""; APP=""; OPSEC_FIX="0"; EXEC_ARGS=()
 
 # --- tor + dns helpers (kept small, auditable) ---
 
@@ -198,7 +198,7 @@ EOF
 # minimal status/leak/newid/opsec/bridges reuse stable logic
 do_status() {
   load_config
-  local enabled=0 backend state ture
+  local enabled=0 backend state
   [[ -f "$STATE_JSON" ]] && enabled=1
   state="disabled"; [[ $enabled -eq 1 ]] && state="enabled"
   backend="$(state_get .backend 2>/dev/null || echo "$(backend_choose)")"
@@ -231,7 +231,16 @@ do_status() {
 }
 do_leaktest() { load_config; local fail=0 body ip istor; body="$(tor_exit_ip)"; ip="$(echo "$body" | grep -o '"IP":"[^"]*' | cut -d'"' -f4 || true)"; istor="$(echo "$body" | grep -o '"IsTor":[a-z]*' | cut -d: -f2 || true)"; [[ "$istor" == "true" ]] && echo "[+] tor exit $ip" || { echo "[-] no tor exit"; fail=1; }; verify_no_direct && echo "[+] direct blocked" || { echo "[-] direct open"; fail=1; }; return $fail; }
 do_newid() { need_root; local hex; hex="$(tor_cookie_hex || true)"; if [[ -n "$hex" ]]; then (exec 3<>/dev/tcp/127.0.0.1/"$CONTROL_PORT" 2>/dev/null && { echo "AUTHENTICATE $hex" >&3; sleep 1; echo "SIGNAL NEWNYM" >&3; sleep 1; echo "QUIT" >&3; } && sleep 5 && ok "NEWNYM sent") || { tor_restart; sleep 8; }; else tor_restart; sleep 8; fi; do_leaktest; }
-do_opsec() { load_config; echo "-- opsec --"; echo "iface: $(get_iface)"; date -u; grep -h nameserver /etc/resolv.conf 2>/dev/null || true; [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) == 1 ]] && echo "[+] ipv6 off" || echo "[!] ipv6 on"; tor_active && echo "[+] tor on" || echo "[-] tor off"; }
+do_opsec() { load_config; echo "-- opsec --"; echo "iface: $(get_iface)"; date -u; grep -h nameserver /etc/resolv.conf 2>/dev/null || true; [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) == 1 ]] && echo "[+] ipv6 off" || echo "[!] ipv6 on"; tor_active && echo "[+] tor on" || echo "[-] tor off";
+  if [[ "${OPSEC_FIX:-0}" == "1" ]]; then
+    need_root
+    if [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" != "1" ]]; then
+      if [[ "$DRY_RUN" == "1" ]]; then echo "would disable ipv6"; else sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1 2>/dev/null && ok "ipv6 disabled" || warn "ipv6 disable failed"; fi
+    fi
+    if tor_active; then :; else
+      if [[ "$DRY_RUN" == "1" ]]; then echo "would restart tor"; else tor_restart; fi
+    fi
+  fi; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -250,6 +259,7 @@ while [[ $# -gt 0 ]]; do
     --exec) CMD="exec"; shift; [[ "${1:-}" == "--" ]] && shift; while [[ $# -gt 0 ]]; do EXEC_ARGS+=("$1"); shift; done ;;
     apt|git|ssh|curl|wget|nmap) CMD="app"; APP="$1"; shift; while [[ $# -gt 0 ]]; do EXEC_ARGS+=("$1"); shift; done ;;
     --mode) MODE="$2"; shift 2 ;;
+    --fix) OPSEC_FIX="1"; shift ;;
     --ram-only) RAM_ONLY="1"; shift ;;
     --dry-run) DRY_RUN="1"; shift ;;
     --no-install) NO_INSTALL="1"; shift ;;

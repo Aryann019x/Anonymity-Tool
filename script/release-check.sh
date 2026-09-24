@@ -7,8 +7,12 @@ fail=0
 run() { echo "[*] $*"; "$@" || { echo "[-] FAILED: $*"; fail=1; }; }
 run shellcheck -S warning bin/anonyx lib/*.sh
 run bash -n bin/anonyx
-run systemd-analyze verify systemd/anonyx.service
-run systemd-analyze verify systemd/anonyx-watchdog.service
+if [[ -x /usr/bin/anonyx ]]; then
+  run systemd-analyze verify systemd/anonyx.service
+  run systemd-analyze verify systemd/anonyx-watchdog.service
+else
+  echo "[!] /usr/bin/anonyx missing (sudo apt install ../*.deb first), systemd verify skipped"
+fi
 if command -v apparmor_parser >/dev/null 2>&1; then
   run apparmor_parser -p etc/apparmor.d/usr.bin.anonyx
 else

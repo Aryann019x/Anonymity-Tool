@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Intentional: apt pinning prefers Debian archive and blocks third-party
+# anonyx builds (downgrade protection, see etc/apt/preferences.d/anonyx).
+anonyx: package-installs-apt-preferences [etc/apt/preferences.d/anonyx]

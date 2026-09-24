@@ -1,0 +1,35 @@
+[package]
+name = "anonyx"
+version = "3.0.0"
+edition = "2021"
+description = "fail-closed Tor killswitch - memory-safe dispatcher (Debian 12+, rust 1.63)"
+license = "GPL-3.0-or-later"
+rust-version = "1.63"
+
+[[bin]]
+name = "anonyx"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+libc = "0.2"
+
+[features]
+default = []
+bpf = []
+landlock = []
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[package.metadata.deb]
+maintainer = "Aryann019x <anonyx@example.invalid>"
+copyright = "2025-2026, Aryann019x"
+license-file = ["LICENSE", "4"]
+extended-description = """fail-closed Tor killswitch for Debian"""
+depends = "tor, curl, nftables, iptables, iproute2"
+section = "net"
+priority = "optional"

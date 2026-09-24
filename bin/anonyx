@@ -275,7 +275,7 @@ done
 case "${CMD:-}" in
   enable) do_enable; exit $? ;;
   restore) do_restore; exit $? ;;
-  status) do_status; exit $? ;;
+  status) do_status "$@"; exit $? ;;
   leaktest) do_leaktest; exit $? ;;
   newid) do_newid; exit $? ;;
   panic) panic_now; exit $? ;;

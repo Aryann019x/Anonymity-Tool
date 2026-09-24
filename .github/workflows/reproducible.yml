@@ -7,7 +7,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
-        run: apt-get update -qq && apt-get install -y dpkg-dev debhelper shellcheck diffoscope 2>/dev/null || true
+        run: apt-get update -qq && apt-get install -y dpkg-dev debhelper shellcheck diffoscope cargo rustc clang libbpf-dev
       - name: Build A
         run: |
           export SOURCE_DATE_EPOCH=$(date +%s)

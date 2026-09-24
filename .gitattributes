@@ -1,4 +1,6 @@
 *.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
 bin/anonyx text eol=lf
 debian/rules text eol=lf
 script/* text eol=lf

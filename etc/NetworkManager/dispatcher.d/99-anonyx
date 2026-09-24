@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# NetworkManager dispatcher: keep DNS locked while anonyx is active.
+# 99-anonyx - runs on up/down. Does nothing when anonyx is off.
+set -u
+STATE="/run/tor-killswitch/state.json"
+if [ -f "$STATE" ]; then
+  logger -t anonyx-nm "NM event $1 $2 with killswitch on; re-locking DNS"
+  printf 'nameserver 127.0.0.1\noptions edns0 trust-ad\n' > /etc/resolv.conf.anonyx.tmp
+  cat /etc/resolv.conf.anonyx.tmp > /etc/resolv.conf
+  rm -f /etc/resolv.conf.anonyx.tmp
+  chattr +i /etc/resolv.conf 2>/dev/null || true
+fi
+exit 0

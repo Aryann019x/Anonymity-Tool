@@ -1,0 +1,22 @@
+name: reproducible
+on: [push, pull_request]
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    container: debian:stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: apt-get update -qq && apt-get install -y dpkg-dev debhelper shellcheck diffoscope 2>/dev/null || true
+      - name: Build A
+        run: |
+          export SOURCE_DATE_EPOCH=$(date +%s)
+          dpkg-buildpackage -us -uc
+          mkdir -p /tmp/a && cp ../*.deb /tmp/a/ 2>/dev/null || true
+      - name: Rebuild B (clean)
+        run: |
+          debian/rules clean 2>/dev/null || true
+          dpkg-buildpackage -us -uc
+          mkdir -p /tmp/b && cp ../*.deb /tmp/b/ 2>/dev/null || true
+      - name: Compare
+        run: bash script/rebuild.sh /tmp/a /tmp/b

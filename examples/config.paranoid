@@ -1,0 +1,7 @@
+# paranoid lab config
+MODE=paranoid
+ALLOW_DHCP=0
+ALLOW_LAN=0
+FW_BACKEND_PREF=nft
+NETNS_ENABLE=1
+EXIT_NODES={de},{nl}

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# static early ruleset baked into initrd. read-only, TPM-measurable.
+# loopback only; everything else DROP until userspace confirms Tor.
+table inet anonyx_early {
+  chain output {
+    type filter hook output priority 0; policy drop;
+    oifname "lo" accept
+    ct state established,related accept
+  }
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iifname "lo" accept
+    ct state established,related accept
+  }
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+  }
+}

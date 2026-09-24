@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Unit]
+Description=anonyx tor killswitch (fail-closed watchdog)
+After=network.target tor.service
+Wants=tor.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/anonyx --enable
+ExecStop=/usr/bin/anonyx --restore
+ExecReload=/usr/bin/anonyx --newid
+Restart=on-failure
+RestartSec=5
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/etc/tor-killswitch /var/log/tor-killswitch /run/tor-killswitch /var/lib/anonyx /etc/tor /etc/resolv.conf
+NoNewPrivileges=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @network-io @process @signal @chown @file-system
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

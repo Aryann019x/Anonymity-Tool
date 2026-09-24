@@ -1,0 +1,35 @@
+Source: anonyx
+Section: net
+Priority: optional
+Maintainer: Aryann019x <anonyx@example.invalid>
+Build-Depends: debhelper-compat (= 13), shellcheck, cargo, rustc, clang, libbpf-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/Aryann019x/Anonymity-Tool
+Rules-Requires-Root: no
+
+Package: anonyx
+Architecture: all
+Depends: tor, curl, nftables, iptables, iproute2, proxychains4 | proxychains, ${misc:Depends}
+Recommends: obfs4proxy, snowflake-client, macchanger, bash-completion, apparmor, tpm2-tools
+Suggests: network-manager, gpio
+Description: fail-closed Tor killswitch for Debian
+ nftables primary with iptables fallback, optional Tor netns isolation,
+ eBPF/XDP guard with nft fallback, corridor-style exit verification,
+ append-only audit log, state.json restore without reboot.
+ Rust dispatcher (memory-safe hot path) with bash fallback.
+
+Package: anonyx-initramfs
+Architecture: all
+Depends: initramfs-tools, ${misc:Depends}
+Recommends: tpm2-tools
+Description: early-boot network block for anonyx (paranoid)
+ initramfs hook + init-premount script. Blocks all egress except
+ loopback until the userspace anonyx daemon confirms Tor bootstrap.
+ Optional package for paranoid installs.
+
+Package: libanonyx-dev
+Architecture: all
+Section: libdevel
+Depends: ${misc:Depends}
+Description: anonyx eBPF object + nft templates for developers
+ Ships lib/bpf/anonyx_kern.c and rule templates for audit.

@@ -1,0 +1,31 @@
+# copy to /etc/anonyx/anonyx.conf
+# every line is optional. cli flags win over this file.
+
+# strict drops everything except tor. paranoid also drops dhcp.
+# transparent adds nat redirect tcp->9040, udp/53->5353. try strict first.
+MODE=strict
+
+# 1 keeps laptop wifi alive (dhcp). 0 is tighter. paranoid forces 0.
+ALLOW_DHCP=1
+
+# 1 allows 192.168/10/172.16 so you can still hit your lab router.
+# 0 is default. turn on only if you need it.
+ALLOW_LAN=0
+
+# 1 = run even if ufw/firewalld has rules. default 0 refuses to clobber.
+# only set if you know what your other firewall does.
+FW_FORCE=0
+
+# exit country lock. empty = tor decides. example: "{de},{nl}"
+EXIT_NODES=
+
+# bridges for censored nets. |-separated raw lines. needs obfs4proxy.
+# get fresh ones from https://bridges.torproject.org/
+# example: BRIDGE_LINES="Bridge obfs4 1.2.3.4:443 ABC...|Bridge obfs4 5.6.7.8:443 DEF..."
+BRIDGE_LINES=
+
+# ports if you run more than one tor
+TOR_PORT=9050
+CONTROL_PORT=9051
+DNS_PORT=5353
+TRANS_PORT=9040

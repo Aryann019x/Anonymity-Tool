@@ -1,0 +1,12 @@
+[Unit]
+Description=anonyx safety restore (fixes dns/fw after crash)
+After=network.target
+ConditionPathExists=/var/lib/anonyx/state
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/anonyx --disable
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

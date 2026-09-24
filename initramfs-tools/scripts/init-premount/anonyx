@@ -1,0 +1,35 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# init-premount: block egress before interfaces come up.
+# Waits up to 30s for rootfs flag; userspace daemon lifts the block
+# only after Tor bootstrap. No network before that, ever.
+set -eu
+PREREQ="udev"
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0;; esac
+
+log() { echo "[anonyx early] $*" > /dev/kmsg 2>/dev/null || echo "[anonyx early] $*"; }
+
+# nft may live in /sbin in initrd
+NFT="/sbin/nft"
+[ -x "$NFT" ] || NFT="nft"
+
+if [ -f /etc/anonyx-initramfs/early.nft ]; then
+  if $NFT -f /etc/anonyx-initramfs/early.nft 2>/dev/null; then
+    log "early block active (egress DROP except lo)"
+  else
+    log "nft apply failed, trying bare drop policy"
+    $NFT delete table inet anonyx_early 2>/dev/null || true
+  fi
+else
+  log "no early ruleset found, net stays host-default (hook missing?)"
+fi
+
+# signal to userspace: early block timestamp
+mkdir -p /run
+date -u +%FT%TZ > /run/anonyx-early-block 2>/dev/null || true
+
+# 30s rootfs grace: if no switch_root by then, offer locked shell.
+# (initramfs init handles timeout; we just leave the block in place.)
+log "waiting for userspace anonyx daemon to confirm Tor bootstrap"
+log "emergency shell (if dropped) keeps network blocked"

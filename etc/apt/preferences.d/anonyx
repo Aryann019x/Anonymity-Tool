@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# apt pinning: prefer Debian archive over third-party anonyx builds.
+# Installs to /etc/apt/preferences.d/anonyx.
+Package: anonyx anonyx-initramfs libanonyx-dev
+Pin: release o=Debian
+Pin-Priority: 900
+
+Package: anonyx anonyx-initramfs libanonyx-dev
+Pin: origin ""
+Pin-Priority: -1

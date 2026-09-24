@@ -1,0 +1,27 @@
+#include <tunables/global>
+/usr/bin/anonyx {
+  #include <abstractions/base>
+  #include <abstractions/bash>
+
+  /etc/tor-killswitch/** r,
+  /etc/tor-killswitch/config r,
+  /etc/tor/torrc rw,
+  /etc/tor/torrc.bak.anonyx rw,
+  /etc/proxychains*.conf rw,
+  /etc/resolv.conf rw,
+  /var/log/tor-killswitch/** rw,
+  /var/lib/anonyx/** rw,
+  /run/tor-killswitch/** rw,
+  /run/tor/control.authcookie r,
+  /var/lib/tor/control_auth_cookie r,
+
+  /usr/bin/anonyx rix,
+  /usr/sbin/nft rix,
+  /usr/sbin/iptables* rix,
+  /usr/bin/ip rix,
+  /bin/systemctl rix,
+  /usr/bin/logger rix,
+
+  deny network inet dgram,
+  deny network inet6 dgram,
+}

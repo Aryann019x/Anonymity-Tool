@@ -1,0 +1,13 @@
+name: keys
+on: [push, pull_request]
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Key docs present and fingerprint format sane
+        run: |
+          test -f docs/keys.md
+          grep -q "1234 5678" docs/keys.md
+          test -f SECURITY.md
+          grep -q "90 days" SECURITY.md

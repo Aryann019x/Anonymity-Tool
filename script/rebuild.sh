@@ -7,10 +7,13 @@ set -o pipefail
 A="${1:-/tmp/a}"; B="${2:-/tmp/b}"
 echo "[*] comparing $A vs $B"
 if command -v diffoscope >/dev/null 2>&1; then
-  diffoscope --max-text-report-size 2000000 "$A"/*.deb "$B"/*.deb || {
-    echo "[-] builds differ (see diffoscope above)"
-    exit 1
-  }
+  for f in "$A"/*.deb; do
+    base="$(basename "$f")"
+    diffoscope --max-text-report-size 2000000 "$f" "$B/$base" || {
+      echo "[-] builds differ ($base, see diffoscope above)"
+      exit 1
+    }
+  done
 else
   # fallback: sha256 compare per file
   fail=0
